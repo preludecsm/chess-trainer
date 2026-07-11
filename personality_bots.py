@@ -184,9 +184,58 @@ class FourPlyBot(PersonalityBot):
             score += value if piece.color == chess.WHITE else -value
         return score if board.turn == chess.WHITE else -score
 
+    def _move_order_key(self, board: chess.Board, move: chess.Move) -> float:
+        """MVV-LVA: prefer capturing valuable victims with cheap attackers."""
+        if not board.is_capture(move):
+            return -1.0
+        victim = board.piece_at(move.to_square)
+        victim_value = PIECE_VALUES[victim.piece_type] if victim else 1  # en passant
+        attacker = board.piece_at(move.from_square)
+        return 10.0 * victim_value - PIECE_VALUES[attacker.piece_type]
+
     def _ordered_moves(self, board: chess.Board):
-        """Captures first — cheap move ordering that speeds up pruning a lot."""
-        return sorted(board.legal_moves, key=board.is_capture, reverse=True)
+        """Best captures first — good ordering makes alpha-beta prune far more."""
+        return sorted(board.legal_moves,
+                      key=lambda m: self._move_order_key(board, m), reverse=True)
+
+    def _quiesce(self, board, alpha, beta) -> float:
+        """
+        Quiescence search: at the depth horizon, keep resolving captures
+        until the position is quiet, so we never evaluate mid-exchange.
+        In check there is no 'quiet': all evasions are searched instead.
+        """
+        in_check = board.is_check()
+        moves = list(board.legal_moves)
+        if not moves:
+            return -1000.0 if in_check else 0.0     # mate or stalemate
+
+        if in_check:
+            best = -float("inf")                     # no stand-pat in check
+            candidates = moves                       # every evasion
+        else:
+            best = self.evaluate(board)              # stand pat
+            if best >= beta:
+                return best
+            alpha = max(alpha, best)
+            candidates = [m for m in moves if board.is_capture(m)]
+
+        candidates.sort(key=lambda m: self._move_order_key(board, m),
+                        reverse=True)
+        for move in candidates:
+            if not in_check:
+                # Delta pruning: skip captures that can't plausibly raise alpha.
+                victim = board.piece_at(move.to_square)
+                gain = PIECE_VALUES[victim.piece_type] if victim else 1
+                if best + gain + 2 < alpha:
+                    continue
+            board.push(move)
+            score = -self._quiesce(board, -beta, -alpha)
+            board.pop()
+            best = max(best, score)
+            alpha = max(alpha, score)
+            if alpha >= beta:
+                break
+        return best
 
     def _negamax(self, board, depth, alpha, beta) -> float:
         if board.is_checkmate():
@@ -195,7 +244,7 @@ class FourPlyBot(PersonalityBot):
                 or board.can_claim_draw():
             return 0.0
         if depth == 0:
-            return self.evaluate(board)
+            return self._quiesce(board, alpha, beta)
         best = -float("inf")
         for move in self._ordered_moves(board):
             board.push(move)

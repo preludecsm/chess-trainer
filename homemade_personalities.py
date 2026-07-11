@@ -59,10 +59,3 @@ class WanderingQueen(_PersonalityEngine):
 
 class PawnStorm(_PersonalityEngine):
     BOT_CLASS = PawnStormSearchBot
-
-
-from personality_bots import FianchettoSearchBot
-
-
-class Fianchetto(_PersonalityEngine):
-    BOT_CLASS = FianchettoSearchBot
