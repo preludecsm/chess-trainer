@@ -34,27 +34,24 @@ while [ $# -gt 0 ]; do
   shift
 done
 
-# Depth -> time controls (policy: blitz, rapid, unlimited; no bullet,
-# no days-based correspondence — min_days:15 blocks those while
-# "correspondence" here admits unlimited games)
+# Depth -> minimum base time (seconds) so the clock allows calculation.
+# max_base stays at the 3-hour ceiling; only the floor moves.
 case "$DEPTH" in
-  1|2|3) TCS="blitz rapid correspondence"; HUMAN="blitz, rapid, unlimited";;
-  4)     TCS="rapid correspondence";       HUMAN="rapid, unlimited";;
-  *)     TCS="correspondence";             HUMAN="unlimited only";;
+  1|2) MINBASE=180;   HUMAN="3+ min (blitz and up)";;
+  3)   MINBASE=300;   HUMAN="5+ min (blitz and up)";;
+  4)   MINBASE=600;   HUMAN="10+ min (rapid and up)";;
+  5)   MINBASE=1500;  HUMAN="25+ min (classical)";;
+  *)   MINBASE=3600;  HUMAN="60+ min (long classical)";;
 esac
 
 echo "$DEPTH" > "$DEPTHFILE"
 sed -i '' "s/^  name: \".*\"/  name: \"$PERSONALITY\"/" "$CONFIG"
 sed -i '' "s/^  hello: .*/  hello: \"$PERSONALITY (depth $DEPTH) reporting for duty. Good luck, {opponent}\"/" "$CONFIG"
-
-awk -v tcs="$TCS" '
-  /^  time_controls:/ {print; n=split(tcs,a," "); for(i=1;i<=n;i++) print "    - " a[i]; skip=1; next}
-  skip && /^    - / {next}
-  {skip=0; print}
-' "$CONFIG" > "$CONFIG.tmp" && mv "$CONFIG.tmp" "$CONFIG"
+sed -i '' "s/^  min_base: .*/  min_base: $MINBASE/" "$CONFIG"
+sed -i '' "s/^  max_base: .*/  max_base: 10800/" "$CONFIG"
 
 tmux send-keys -t chessbot C-c
 sleep 2
 tmux send-keys -t chessbot "caffeinate -i python3 lichess-bot.py" Enter
-echo "Bot restarted as: $PERSONALITY, depth $DEPTH (unrated only)"
+echo "Bot restarted as: $PERSONALITY, depth $DEPTH (unrated, live games only)"
 echo "Accepting: $HUMAN"
