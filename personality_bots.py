@@ -20,6 +20,76 @@ PIECE_VALUES = {
     chess.ROOK: 5, chess.QUEEN: 9, chess.KING: 0,
 }
 
+# Piece-square tables, White's perspective, rank 8 (index 0) down to rank 1.
+# Values in centipawns/100 (i.e. pawn units). Classic "simplified evaluation" set.
+PST = {
+    "P": [  # pawns: advance, control center, don't push rook pawns early
+        0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+        0.5,  0.5,  0.5,  0.5,  0.5,  0.5,  0.5,  0.5,
+        0.1,  0.1,  0.2,  0.3,  0.3,  0.2,  0.1,  0.1,
+        0.05, 0.05, 0.10, 0.25, 0.25, 0.10, 0.05, 0.05,
+        0.0,  0.0,  0.0,  0.20, 0.20, 0.0,  0.0,  0.0,
+        0.05,-0.05,-0.10, 0.0,  0.0, -0.10,-0.05, 0.05,
+        0.05, 0.10, 0.10,-0.20,-0.20, 0.10, 0.10, 0.05,
+        0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+    ],
+    "N": [  # knights: centralize; rim is grim
+       -0.50,-0.40,-0.30,-0.30,-0.30,-0.30,-0.40,-0.50,
+       -0.40,-0.20, 0.0,  0.0,  0.0,  0.0, -0.20,-0.40,
+       -0.30, 0.0,  0.10, 0.15, 0.15, 0.10, 0.0, -0.30,
+       -0.30, 0.05, 0.15, 0.20, 0.20, 0.15, 0.05,-0.30,
+       -0.30, 0.0,  0.15, 0.20, 0.20, 0.15, 0.0, -0.30,
+       -0.30, 0.05, 0.10, 0.15, 0.15, 0.10, 0.05,-0.30,
+       -0.40,-0.20, 0.0,  0.05, 0.05, 0.0, -0.20,-0.40,
+       -0.50,-0.40,-0.30,-0.30,-0.30,-0.30,-0.40,-0.50,
+    ],
+    "B": [  # bishops: long diagonals, avoid corners
+       -0.20,-0.10,-0.10,-0.10,-0.10,-0.10,-0.10,-0.20,
+       -0.10, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0, -0.10,
+       -0.10, 0.0,  0.05, 0.10, 0.10, 0.05, 0.0, -0.10,
+       -0.10, 0.05, 0.05, 0.10, 0.10, 0.05, 0.05,-0.10,
+       -0.10, 0.0,  0.10, 0.10, 0.10, 0.10, 0.0, -0.10,
+       -0.10, 0.10, 0.10, 0.10, 0.10, 0.10, 0.10,-0.10,
+       -0.10, 0.05, 0.0,  0.0,  0.0,  0.0,  0.05,-0.10,
+       -0.20,-0.10,-0.10,-0.10,-0.10,-0.10,-0.10,-0.20,
+    ],
+    "R": [  # rooks: 7th rank, central files, don't move early
+        0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+        0.05, 0.10, 0.10, 0.10, 0.10, 0.10, 0.10, 0.05,
+       -0.05, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0, -0.05,
+       -0.05, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0, -0.05,
+       -0.05, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0, -0.05,
+       -0.05, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0, -0.05,
+       -0.05, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0, -0.05,
+        0.0,  0.0,  0.0,  0.05, 0.05, 0.0,  0.0,  0.0,
+    ],
+    "Q": [  # queen: mild centralization, don't develop too early
+       -0.20,-0.10,-0.10,-0.05,-0.05,-0.10,-0.10,-0.20,
+       -0.10, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0, -0.10,
+       -0.10, 0.0,  0.05, 0.05, 0.05, 0.05, 0.0, -0.10,
+       -0.05, 0.0,  0.05, 0.05, 0.05, 0.05, 0.0, -0.05,
+        0.0,  0.0,  0.05, 0.05, 0.05, 0.05, 0.0, -0.05,
+       -0.10, 0.05, 0.05, 0.05, 0.05, 0.05, 0.0, -0.10,
+       -0.10, 0.0,  0.05, 0.0,  0.0,  0.0,  0.0, -0.10,
+       -0.20,-0.10,-0.10,-0.05,-0.05,-0.10,-0.10,-0.20,
+    ],
+    "K": [  # king (middlegame): castle, stay behind pawns
+       -0.30,-0.40,-0.40,-0.50,-0.50,-0.40,-0.40,-0.30,
+       -0.30,-0.40,-0.40,-0.50,-0.50,-0.40,-0.40,-0.30,
+       -0.30,-0.40,-0.40,-0.50,-0.50,-0.40,-0.40,-0.30,
+       -0.30,-0.40,-0.40,-0.50,-0.50,-0.40,-0.40,-0.30,
+       -0.20,-0.30,-0.30,-0.40,-0.40,-0.30,-0.30,-0.20,
+       -0.10,-0.20,-0.20,-0.20,-0.20,-0.20,-0.20,-0.10,
+        0.20, 0.20, 0.0,  0.0,  0.0,  0.0,  0.20, 0.20,
+        0.20, 0.30, 0.10, 0.0,  0.0,  0.10, 0.30, 0.20,
+    ],
+}
+
+PST_SYMBOL = {
+    chess.PAWN: "P", chess.KNIGHT: "N", chess.BISHOP: "B",
+    chess.ROOK: "R", chess.QUEEN: "Q", chess.KING: "K",
+}
+
 
 # ----------------------------------------------------------------------
 # Shared tactical helper
@@ -173,14 +243,21 @@ class FourPlyBot(PersonalityBot):
         self.depth = depth
 
     def evaluate(self, board: chess.Board) -> float:
-        """Score from the side-to-move's perspective (for negamax)."""
+        """
+        Material plus piece-square tables, from the side-to-move's
+        perspective (for negamax). The tables encode basic chess
+        knowledge the raw material count lacks: knights belong near
+        the centre, pawns want to advance through the middle, the
+        king wants to castle and hide, and rook pawns are not a plan.
+        """
         score = 0.0
         for square, piece in board.piece_map().items():
             value = PIECE_VALUES[piece.piece_type]
-            if square in self.CENTER and piece.piece_type in (
-                chess.PAWN, chess.KNIGHT, chess.BISHOP
-            ):
-                value += 0.15                 # mild centralization nudge
+            table = PST[PST_SYMBOL[piece.piece_type]]
+            # Tables are written from White's view, a8 (index 0) to h1 (63).
+            index = chess.square_mirror(square) if piece.color == chess.WHITE \
+                else square
+            value += table[index]
             score += value if piece.color == chess.WHITE else -value
         return score if board.turn == chess.WHITE else -score
 
@@ -222,12 +299,6 @@ class FourPlyBot(PersonalityBot):
         candidates.sort(key=lambda m: self._move_order_key(board, m),
                         reverse=True)
         for move in candidates:
-            if not in_check:
-                # Delta pruning: skip captures that can't plausibly raise alpha.
-                victim = board.piece_at(move.to_square)
-                gain = PIECE_VALUES[victim.piece_type] if victim else 1
-                if best + gain + 2 < alpha:
-                    continue
             board.push(move)
             score = -self._quiesce(board, -beta, -alpha)
             board.pop()
@@ -257,18 +328,21 @@ class FourPlyBot(PersonalityBot):
         return best
 
     def select(self, board: chess.Board) -> chess.Move:
-        best_score = -float("inf")
-        best_moves = []
-        alpha, beta = -float("inf"), float("inf")
+        """
+        Root search. Every root move gets a FULL window: narrowing alpha
+        here would make later moves return fail-low bounds rather than
+        true scores, and those bogus values would tie with the best and
+        get picked at random. (This bug made the bot play nonsense.)
+        """
+        scored = []
         for move in self._ordered_moves(board):
             board.push(move)
-            score = -self._negamax(board, self.depth - 1, -beta, -alpha)
+            score = -self._negamax(board, self.depth - 1,
+                                   -float("inf"), float("inf"))
             board.pop()
-            if score > best_score + 1e-9:
-                best_score, best_moves = score, [move]
-            elif abs(score - best_score) <= 1e-9:
-                best_moves.append(move)
-            alpha = max(alpha, score)
+            scored.append((score, move))
+        best = max(s for s, _ in scored)
+        best_moves = [m for s, m in scored if abs(s - best) <= 1e-9]
         return random.choice(best_moves)
 
 
