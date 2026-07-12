@@ -85,6 +85,30 @@ PST = {
     ],
 }
 
+# King's endgame table: centralize instead of hiding once the queens are gone.
+PST["K_END"] = [
+   -0.50,-0.40,-0.30,-0.20,-0.20,-0.30,-0.40,-0.50,
+   -0.30,-0.20,-0.10, 0.0,  0.0, -0.10,-0.20,-0.30,
+   -0.30,-0.10, 0.20, 0.30, 0.30, 0.20,-0.10,-0.30,
+   -0.30,-0.10, 0.30, 0.40, 0.40, 0.30,-0.10,-0.30,
+   -0.30,-0.10, 0.30, 0.40, 0.40, 0.30,-0.10,-0.30,
+   -0.30,-0.10, 0.20, 0.30, 0.30, 0.20,-0.10,-0.30,
+   -0.30,-0.30, 0.0,  0.0,  0.0,  0.0, -0.30,-0.30,
+   -0.50,-0.30,-0.30,-0.30,-0.30,-0.30,-0.30,-0.50,
+]
+
+# Total non-pawn material at the start (per side), used to taper the king table.
+PHASE_MAX = 2 * (PIECE_VALUES[chess.KNIGHT] + PIECE_VALUES[chess.BISHOP]
+                 + PIECE_VALUES[chess.ROOK]) + PIECE_VALUES[chess.QUEEN]
+
+DOUBLED_PAWN = -0.20
+ISOLATED_PAWN = -0.20
+PASSED_PAWN = (0.0, 0.10, 0.15, 0.25, 0.40, 0.65, 1.00, 0.0)  # by rank advanced
+BISHOP_PAIR = 0.30
+MOBILITY_WEIGHT = 0.02
+CASTLED_BONUS = 0.25
+
+
 PST_SYMBOL = {
     chess.PAWN: "P", chess.KNIGHT: "N", chess.BISHOP: "B",
     chess.ROOK: "R", chess.QUEEN: "Q", chess.KING: "K",
@@ -242,23 +266,120 @@ class FourPlyBot(PersonalityBot):
     def __init__(self, depth: int = 4):
         self.depth = depth
 
+    def _phase(self, board: chess.Board) -> float:
+        """1.0 = full middlegame, 0.0 = bare endgame. Tapers the king table."""
+        material = 0
+        for pt in (chess.KNIGHT, chess.BISHOP, chess.ROOK, chess.QUEEN):
+            material += PIECE_VALUES[pt] * (
+                len(board.pieces(pt, chess.WHITE)) +
+                len(board.pieces(pt, chess.BLACK))
+            )
+        return min(1.0, material / (2.0 * PHASE_MAX))
+
+    def _pawn_structure(self, board: chess.Board, color: chess.Color) -> float:
+        """Doubled and isolated pawn penalties; passed pawn bonuses."""
+        score = 0.0
+        pawns = board.pieces(chess.PAWN, color)
+        enemy_pawns = board.pieces(chess.PAWN, not color)
+        files = [0] * 8
+        for sq in pawns:
+            files[chess.square_file(sq)] += 1
+
+        for f in range(8):
+            if files[f] > 1:
+                score += DOUBLED_PAWN * (files[f] - 1)
+            if files[f] > 0:
+                left = files[f - 1] if f > 0 else 0
+                right = files[f + 1] if f < 7 else 0
+                if left == 0 and right == 0:
+                    score += ISOLATED_PAWN * files[f]      # no neighbours
+
+        for sq in pawns:
+            f, r = chess.square_file(sq), chess.square_rank(sq)
+            advanced = r - 1 if color == chess.WHITE else 6 - r
+            blocked = False
+            for ef in (f - 1, f, f + 1):
+                if not 0 <= ef <= 7:
+                    continue
+                for esq in enemy_pawns:
+                    if chess.square_file(esq) != ef:
+                        continue
+                    er = chess.square_rank(esq)
+                    ahead = er > r if color == chess.WHITE else er < r
+                    if ahead:
+                        blocked = True
+                        break
+                if blocked:
+                    break
+            if not blocked and 0 <= advanced <= 7:
+                score += PASSED_PAWN[advanced]
+        return score
+
+    def _king_safety(self, board: chess.Board, color: chess.Color,
+                     phase: float) -> float:
+        """Reward a castled king with pawns still in front of it."""
+        king = board.king(color)
+        if king is None:
+            return 0.0
+        score = 0.0
+        kf, kr = chess.square_file(king), chess.square_rank(king)
+        home = 0 if color == chess.WHITE else 7
+        if kr == home and (kf >= 6 or kf <= 2):
+            score += CASTLED_BONUS                          # tucked away
+        shield = 0
+        step = 1 if color == chess.WHITE else -1
+        for f in (kf - 1, kf, kf + 1):
+            if not 0 <= f <= 7:
+                continue
+            for dr in (1, 2):
+                r = kr + step * dr
+                if not 0 <= r <= 7:
+                    continue
+                piece = board.piece_at(chess.square(f, r))
+                if piece and piece.piece_type == chess.PAWN \
+                        and piece.color == color:
+                    shield += 1
+                    break
+        score += 0.10 * shield
+        return score * phase          # king safety only matters with pieces on
+
     def evaluate(self, board: chess.Board) -> float:
         """
-        Material plus piece-square tables, from the side-to-move's
-        perspective (for negamax). The tables encode basic chess
-        knowledge the raw material count lacks: knights belong near
-        the centre, pawns want to advance through the middle, the
-        king wants to castle and hide, and rook pawns are not a plan.
+        Material, piece-square tables, and positional knowledge, scored
+        from the side-to-move's perspective (for negamax).
+
+        Beyond material and the tables, this adds:
+          - tapered king table (hide in the middlegame, centralize in the endgame)
+          - pawn structure (doubled, isolated, passed)
+          - king safety (castled, pawn shield) — weighted by game phase
+          - bishop pair
+
+        (Mobility was tried and removed: generating legal moves at every
+        leaf cost ~65% of total evaluation time in Python, which bought
+        less strength than the extra search depth it consumed.)
         """
+        phase = self._phase(board)
         score = 0.0
+
         for square, piece in board.piece_map().items():
             value = PIECE_VALUES[piece.piece_type]
-            table = PST[PST_SYMBOL[piece.piece_type]]
-            # Tables are written from White's view, a8 (index 0) to h1 (63).
             index = chess.square_mirror(square) if piece.color == chess.WHITE \
                 else square
-            value += table[index]
+            if piece.piece_type == chess.KING:
+                mid = PST["K"][index]
+                end = PST["K_END"][index]
+                value += mid * phase + end * (1.0 - phase)
+            else:
+                value += PST[PST_SYMBOL[piece.piece_type]][index]
             score += value if piece.color == chess.WHITE else -value
+
+        for color in (chess.WHITE, chess.BLACK):
+            sub = self._pawn_structure(board, color)
+            sub += self._king_safety(board, color, phase)
+            if len(board.pieces(chess.BISHOP, color)) >= 2:
+                sub += BISHOP_PAIR
+            score += sub if color == chess.WHITE else -sub
+
         return score if board.turn == chess.WHITE else -score
 
     def _move_order_key(self, board: chess.Board, move: chess.Move) -> float:
@@ -316,6 +437,7 @@ class FourPlyBot(PersonalityBot):
             return 0.0
         if depth == 0:
             return self._quiesce(board, alpha, beta)
+
         best = -float("inf")
         for move in self._ordered_moves(board):
             board.push(move)
@@ -325,6 +447,7 @@ class FourPlyBot(PersonalityBot):
             alpha = max(alpha, score)
             if alpha >= beta:
                 break                          # prune
+
         return best
 
     def select(self, board: chess.Board) -> chess.Move:
@@ -389,7 +512,16 @@ class SearchingPersonality(FourPlyBot):
 
 
 class BeginnerSearchBot(SearchingPersonality):
-    """No stylistic bias — just plain material-and-center search."""
+    """
+    No stylistic bias — plain material and positional search.
+
+    RANDOM_MARGIN gives variety: among root moves scoring within this
+    many pawns of the best, one is picked at random. Small enough that
+    it never plays a real blunder; large enough that repeated games from
+    the same opening don't follow the same script. Tune to taste — 0.0
+    is fully deterministic, 0.5 starts to look careless.
+    """
+    RANDOM_MARGIN = 0.25
 
 
 class SafeRandomSearchBot(SearchingPersonality):
@@ -404,6 +536,7 @@ class SafeRandomSearchBot(SearchingPersonality):
 class WanderingQueenSearchBot(SearchingPersonality):
     """Values an active, far-flung queen — but now she calculates."""
 
+    RANDOM_MARGIN = 0.25
     HOME = {chess.WHITE: chess.D1, chess.BLACK: chess.D8}
 
     def style_for(self, board: chess.Board, color: chess.Color) -> float:
@@ -416,6 +549,8 @@ class WanderingQueenSearchBot(SearchingPersonality):
 
 class PawnStormSearchBot(SearchingPersonality):
     """Values pawns advanced toward the enemy king."""
+
+    RANDOM_MARGIN = 0.25
 
     def style_for(self, board: chess.Board, color: chess.Color) -> float:
         enemy_king = board.king(not color)
@@ -472,6 +607,7 @@ if __name__ == "__main__":
 class FianchettoSearchBot(SearchingPersonality):
     """Loves bishops on the long diagonals, snug behind their pawns."""
 
+    RANDOM_MARGIN = 0.25
     NEST = {chess.WHITE: (chess.B2, chess.G2), chess.BLACK: (chess.B7, chess.G7)}
     SHELTER = {chess.WHITE: (chess.B3, chess.G3), chess.BLACK: (chess.B6, chess.G6)}
 

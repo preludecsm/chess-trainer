@@ -60,12 +60,16 @@ Apple Shortcut     (Tailscale)      │ edit config.yml + depth       ▲
                                    LaunchAgent starts it at boot)
 ```
 
-- **personality_bots.py** — all personalities are alpha-beta searchers
-  sharing one engine core (negamax + alpha-beta, MVV-LVA move ordering,
-  and a quiescence search that resolves captures before evaluating —
-  the last is what keeps it from blundering material mid-exchange). Each
-  personality adds a small bias to the evaluation function, so style
-  survives calculation instead of replacing it.
+- **personality_bots.py** — all personalities share one engine core:
+  negamax with alpha-beta, MVV-LVA move ordering, and a quiescence search
+  that resolves captures before evaluating (this is what stops it
+  blundering material mid-exchange). The evaluation knows material,
+  piece-square tables, pawn structure (doubled / isolated / passed), king
+  safety, and the bishop pair, with the king's table tapered between
+  middlegame and endgame. Each personality then adds a *small* bias to
+  that evaluation — so style emerges from search, not from a book, and it
+  will happily pursue its style into positions where that's a bad idea.
+  That is the point: the weakness is legible and punishable.
 - **homemade_personalities.py** — thin adapters exposing each bot to
   lichess-bot as a named homemade engine. Reads depth from
   `engine_depth.txt` (default 4). Adding a class here automatically makes
@@ -77,34 +81,59 @@ Apple Shortcut     (Tailscale)      │ edit config.yml + depth       ▲
 
 ## Personalities
 
-| Name | Style | Trains you on |
-|---|---|---|
-| **Beginner** | No bias — material + centralization search | Clean baseline opponent at any depth |
-| **SafeRandom** | Random among moves within ¾ pawn of best; never blunders within its horizon, never has a plan | Punishing planlessness; converting small edges |
-| **WanderingQueen** | Values an active, far-flung queen | Exploiting queen sorties; tempo play |
-| **PawnStorm** | Values pawns advanced toward your king | Defending pawn storms; counterplay timing |
-| **Fianchetto** | Values bishops nested on b2/g2 (b7/g7) behind their pawns; resists trading them | Prying open the long diagonal: trade the fianchetto bishop, then occupy the holes it guarded |
+| Name | Style | Margin | Trains you on |
+|---|---|---|---|
+| **Beginner** | No stylistic bias — plain positional search | 0.25 | Clean baseline opponent at any depth |
+| **SafeRandom** | Random among all moves within ¾ pawn of best: never blunders within its horizon, never has a plan | 0.75 | Punishing planlessness; converting small edges |
+| **WanderingQueen** | Values an active, far-flung queen | 0.25 | Exploiting queen sorties; tempo play |
+| **PawnStorm** | Values pawns advanced toward your king | 0.25 | Defending pawn storms; counterplay timing |
+| **Fianchetto** | Values bishops nested on b2/g2 (b7/g7) behind their pawns; resists trading them | 0.25 | Trade off the fianchetto bishop, then occupy the holes it guarded |
+
+### Randomness (`RANDOM_MARGIN`)
+
+Among root moves scoring within this many pawns of the best, one is
+picked at random. This keeps repeated games from following the same
+script without making the bot play badly — at 0.25 it varies between
+d5 / e5 / Nf6 / Nc6 against 1.e4 (all real openings) while self-play
+material stays dead even. Tune it in personality_bots.py:
+
+- `0.0` — fully deterministic, and therefore memorizable
+- `0.15` — slight variety, near-best every move
+- `0.25` — real opening variety, no blunders *(current default)*
+- `0.40+` — starts conceding real ground for variety's sake
+
+Deliberately **no opening book.** A book would make the bot play a
+memorized line correctly for 12 moves and teach nothing about why. The
+personality bias produces the same *kind* of setup (Fianchetto keeps
+reaching for g6/Bg7) from its own search, including in positions where
+it shouldn't — which is exactly the exploitable, over-the-board weakness
+a trainer wants.
 
 ## Strength and accepted time controls
 
-Depth 1–8, shared by all personalities. Quiescence search adds nodes but
-MVV-LVA ordering pays for them; net think time is roughly 5x per ply.
-**Live games only** — correspondence and unlimited are declined (they're
-hard to find in the Lichess app). Depth sets a *minimum base time* so the
-clock always allows the bot to calculate; `max_base` stays at the 3-hour
-ceiling, so anything from the floor up through classical is accepted:
+Depth 1–8, shared by all personalities. Think time grows steeply — this
+is Python, and there is no transposition table (one was tried; see
+"What didn't work"). Measured on a Mac mini, middlegame positions:
 
-| Depth | Approx. think/move | Min base time | Accepts |
+| Depth | Think/move (middlegame) | Min base time | Practical use |
 |---|---|---|---|
-| 1–2 | instant–2 s | 3 min | blitz and up |
-| 3 | ~1–2 s | 5 min | blitz and up |
-| 4 (default) | ~5–6 s | 10 min | rapid and up |
-| 5 | ~30 s | 25 min | classical |
-| 6+ | minutes | 60 min | long classical |
+| 2 | ~1 s | 3 min | blitz; weak but instant |
+| 3 (recommended) | ~15–20 s | 5 min | rapid and up; the sweet spot |
+| 4 | ~80–135 s | 10 min | classical only (30+ min games) |
+| 5+ | many minutes | 25–60 min | impractical |
 
-Challenge from the app as e.g. **Rapid 10+0 or 15+10** at depth 4 — live
-games open straight to the board, no game-finding needed. (`min_base`
-checks base time only; a 3+2 game clears the depth-1/2 floor even though
+**Depth 3 is the recommendation.** With the current evaluation it likely
+plays better than depth 4 did with the old one, and it moves ~8x faster.
+Depth 4 is viable only in the long classical games (e.g. 180+0) that the
+config accepts.
+
+`switch.sh` sets a *minimum base time* per depth so the clock always
+allows the bot to calculate; `max_base` stays at the 3-hour ceiling, so
+anything from the floor up through classical is accepted.
+
+Challenge from the app as e.g. **Rapid 15+10** at depth 3 — live games
+open straight to the board, no game-finding needed. (`min_base` checks
+base time only; a 3+2 game clears the depth-1/2 floor even though
 increment isn't counted.)
 
 ## Challenge policy (as configured)
@@ -129,7 +158,7 @@ increment isn't counted.)
 switch.sh                          # show current personality/depth + menu
 switch.sh PawnStorm                # change personality, keep depth
 switch.sh depth 3                  # change depth, keep personality
-switch.sh WanderingQueen depth 4   # change both
+switch.sh WanderingQueen depth 3   # change both
 startbot.sh                        # is it running? start it if not
 tmux attach -t chessbot            # live log (Ctrl-b, release, d to leave)
 tmux capture-pane -pt chessbot | tail -20   # peek without attaching
@@ -138,8 +167,9 @@ tmux capture-pane -pt chessbot | tail -20   # peek without attaching
 Challenge **MickTrainerBot** from the main account
 (https://lichess.org/@/MickTrainerBot — green dot = bot online). Set the
 challenge to **Casual** and a live time control the current depth accepts
-(e.g. Rapid 10+0 at depth 4). The board opens as soon as the bot accepts;
-the game chat greets with e.g. *"PawnStorm (depth 4) reporting for duty"*
+(e.g. Rapid 15+10 at depth 3). The board opens as soon as the bot
+accepts; the game chat greets with e.g. *"PawnStorm (depth 3) reporting
+for duty"*
 — confirmation of which trainer you're facing.
 
 To confirm the bot's live games directly from the token:
@@ -223,8 +253,10 @@ Homebrew's PATH; both scripts also export it defensively).
 
 Add a personality: subclass `SearchingPersonality` in
 personality_bots.py and override `style_for(board, color)` — a small
-positional score. Keep bonuses in *tenths* of a pawn or the search will
-sacrifice real material for style points. Add a three-line adapter class
+positional score for how well the position suits the personality. Keep
+bonuses in *tenths* of a pawn, or the search will sacrifice real material
+for style points. Set `RANDOM_MARGIN` (0.25 is the house default). Add a
+three-line adapter class
 in homemade_personalities.py; its class name becomes a switch.sh argument
 automatically. Then `./deploy.sh && switch.sh NewName`, and commit:
 
@@ -233,10 +265,39 @@ git add -A && git commit -m "Add Fianchetto personality"
 ```
 
 Ideas: Simplifier (trades when ahead), Hypermodern (central control from
-a distance), per-personality opening books. Engine-strength upgrades that
-apply to every personality: piece-square tables and king-safety terms
-(more chess knowledge), or a transposition table with iterative deepening
-(more effective depth — would likely bring depth 5 into rapid range).
+a distance), opening-specific personalities.
+
+## What didn't work (and why)
+
+Recorded so they aren't retried blindly:
+
+- **Transposition table.** Added, measured, removed. Hit rate was only
+  9.2% — the TT key includes depth, so entries from a depth-2 search
+  don't serve a depth-3 probe, and it cost more to hash and store 14k
+  positions than it saved. A TT only pays off alongside **iterative
+  deepening** (search depth 1, 2, 3… reusing the table and the previous
+  iteration's best move for ordering). That is the correct next
+  performance project, and it would make depth 4–5 practical.
+- **Mobility term in the evaluation** (bonus per legal move). Profiling
+  showed it consumed ~65% of total evaluation time — generating legal
+  moves at every leaf is too expensive in Python — for less strength than
+  the search depth it cost.
+- **Delta pruning in quiescence.** Skipped captures that mattered, so the
+  engine evaluated positions as quiet when material was still hanging.
+  Removed; it was a genuine source of blunders.
+- **Opening book.** Deliberately rejected — see Randomness above.
+
+### The bug that mattered
+
+For most of the build, the bot played nonsense — hanging queens, moving
+in 1 second when it should take 15. The cause was in the *root search*:
+`select()` narrowed alpha across root moves, so every move after the
+first returned a fail-low **bound** rather than its true score. Those
+bogus values tied with the best and were picked at random — meaning the
+bot was effectively choosing a random move from a pool of garbage scores.
+Every root move must be searched with a **full window**. Fixed; the
+symptom (fast moves + random blunders) is worth recognising if it ever
+returns.
 
 ## Troubleshooting
 
@@ -251,7 +312,10 @@ apply to every personality: piece-square tables and king-safety terms
 | Bot offline after reboot | LaunchAgent should handle it; otherwise `startbot.sh` |
 | Depth change didn't take | Depth is read per game; the restart switch.sh performs picks it up |
 | Behavior differs from repo code | Edited here but not deployed — `./deploy.sh` then restart |
-| Bot plays weakly / low accuracy | Raise depth (`switch.sh depth 5` → classical time controls). Depth 4 with quiescence already plays solid tactical chess |
+| Bot plays weakly / low accuracy | Raise depth (`switch.sh depth 4`, classical only). If it moves in ~1s AND blunders, that is the root-window bug — see "The bug that mattered" |
+| Bot moves suspiciously fast | Depth 3 should take ~15s in a middlegame. Instant moves mean the search is not running — check the engine file actually deployed (`./deploy.sh`) |
+| `RateLimitedError` in the log | Too many restarts in quick succession. Wait 1–2 minutes; do NOT restart again — it re-triggers the limit |
+| Bot plays the same moves every game | `RANDOM_MARGIN` is 0 for that personality — set it to 0.25 |
 
 ## Security notes
 
