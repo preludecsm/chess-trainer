@@ -1,14 +1,23 @@
 """
-lichess-bot adapters for the personality bots.
+lichess-bot adapter for the personality bots.
 
-Personalities (config.yml engine name / switch.sh argument):
-    Beginner        - plain search, no stylistic bias
-    SafeRandom      - random among non-blundering moves (within its depth)
-    WanderingQueen  - queen-activity-biased search
-    PawnStorm       - pawn-advance-biased search
+The bot process stays connected permanently. Personality and depth are
+read from files at the start of every game, so switch.sh can change them
+without restarting — which matters because Lichess rate-limits the event
+stream, and every restart reconnects to it.
 
-Search depth is read from engine_depth.txt in this directory
-(default 4 if the file is missing). All personalities share it.
+  engine_personality.txt   e.g. "Fianchetto"
+  engine_depth.txt         e.g. "3"
+
+config.yml keeps a constant engine name:
+
+  engine:
+    dir: "."
+    protocol: "homemade"
+    name: "Personality"
+
+A change takes effect on the NEXT game — never mid-game, which is the
+behaviour you want anyway.
 """
 import os
 import chess
@@ -18,44 +27,63 @@ from lib.engine_wrapper import MinimalEngine
 from lib.lichess_types import HOMEMADE_ARGS_TYPE
 
 from personality_bots import (
-    BeginnerSearchBot, SafeRandomSearchBot,
-    WanderingQueenSearchBot, PawnStormSearchBot,
+    BeginnerSearchBot, SafeRandomSearchBot, WanderingQueenSearchBot,
+    PawnStormSearchBot, FianchettoSearchBot,
 )
 
-_DEPTH_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                           "engine_depth.txt")
+# The switch.sh usage menu is generated from these keys.
+PERSONALITIES = {
+    "Beginner": BeginnerSearchBot,
+    "SafeRandom": SafeRandomSearchBot,
+    "WanderingQueen": WanderingQueenSearchBot,
+    "PawnStorm": PawnStormSearchBot,
+    "Fianchetto": FianchettoSearchBot,
+}
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_PERSONALITY_FILE = os.path.join(_HERE, "engine_personality.txt")
+_DEPTH_FILE = os.path.join(_HERE, "engine_depth.txt")
+
+DEFAULT_PERSONALITY = "Beginner"
+DEFAULT_DEPTH = 3
 
 
-def _read_depth(default: int = 4) -> int:
+def _read_personality() -> str:
+    try:
+        with open(_PERSONALITY_FILE) as f:
+            name = f.read().strip()
+        return name if name in PERSONALITIES else DEFAULT_PERSONALITY
+    except OSError:
+        return DEFAULT_PERSONALITY
+
+
+def _read_depth() -> int:
     try:
         with open(_DEPTH_FILE) as f:
             return max(1, min(8, int(f.read().strip())))
     except (OSError, ValueError):
-        return default
+        return DEFAULT_DEPTH
 
 
-class _PersonalityEngine(MinimalEngine):
-    """Shared adapter: lazily builds the bot, delegates move choice to it."""
+class Personality(MinimalEngine):
+    """
+    One engine class for every personality. Re-reads the config files
+    whenever a new game starts, so switch.sh never needs to restart the
+    process.
+    """
 
-    BOT_CLASS = None
+    def _refresh(self) -> None:
+        name, depth = _read_personality(), _read_depth()
+        current = getattr(self, "_settings", None)
+        if current != (name, depth):
+            self._settings = (name, depth)
+            self._bot = PERSONALITIES[name](depth=depth)
+            print(f"[personality] now playing as {name} at depth {depth}",
+                  flush=True)
 
     def search(self, board: chess.Board, *args: HOMEMADE_ARGS_TYPE) -> PlayResult:  # noqa: ARG002
-        if not hasattr(self, "_bot"):
-            self._bot = self.BOT_CLASS(depth=_read_depth())
+        # Re-read at the start of each game, and on the very first call.
+        # Mid-game changes are deliberately ignored.
+        if not hasattr(self, "_bot") or board.fullmove_number <= 1:
+            self._refresh()
         return PlayResult(self._bot.select(board), None)
-
-
-class Beginner(_PersonalityEngine):
-    BOT_CLASS = BeginnerSearchBot
-
-
-class SafeRandom(_PersonalityEngine):
-    BOT_CLASS = SafeRandomSearchBot
-
-
-class WanderingQueen(_PersonalityEngine):
-    BOT_CLASS = WanderingQueenSearchBot
-
-
-class PawnStorm(_PersonalityEngine):
-    BOT_CLASS = PawnStormSearchBot
