@@ -79,11 +79,34 @@ Apple Shortcut     (Tailscale)      │ edit config.yml + depth       ▲
   `PERSONALITIES` dict and it becomes a valid `switch.sh` argument.
 - **switch.sh** — writes the two files. Takes effect on your next game;
   **no restart, no reconnect**, so it can be run as often as you like.
+  The valid personality list is hardcoded in the script (an earlier
+  version grepped it out of the deployed adapter, which silently broke
+  whenever the deployed copy was stale — add new personalities to the
+  `VALID` line).
 - **restartbot.sh** — a genuine restart, with a cold-down wait. Needed
   only after code changes (`./deploy.sh`) or when switch.sh says the
   accepted time controls changed.
 - **startbot.sh** — idempotent check-and-start; also run at boot by
   `~/Library/LaunchAgents/com.mick.chessbot.plist`.
+
+### The chat greeting
+
+`config.yml`'s `hello:` is read **once at startup**, so it cannot track a
+personality that now changes without a restart. It is therefore generic:
+
+    Welcome to MickTrainerBot. Possible personalities are Beginner,
+    SafeRandom, WanderingQueen, PawnStorm, Fianchetto. Good luck!
+
+Which one you are *actually* facing is deliberately not announced — read
+the board. To check from the terminal:
+
+```bash
+cat lichess-bot/engine_personality.txt          # what's configured
+tmux capture-pane -pt chessbot | grep personality   # what the bot loaded
+```
+
+The second is authoritative: the adapter logs
+`[personality] now playing as X at depth N` when it builds the engine.
 
 ### Why switching doesn't restart the bot
 
@@ -100,9 +123,34 @@ connected before reconnecting — which is what actually clears the limit.
 |---|---|---|---|
 | **Beginner** | No stylistic bias — plain positional search | 0.25 | Clean baseline opponent at any depth |
 | **SafeRandom** | Random among all moves within ¾ pawn of best: never blunders within its horizon, never has a plan | 0.75 | Punishing planlessness; converting small edges |
-| **WanderingQueen** | Values an active, far-flung queen | 0.25 | Exploiting queen sorties; tempo play |
-| **PawnStorm** | Values pawns advanced toward your king | 0.25 | Defending pawn storms; counterplay timing |
-| **Fianchetto** | Values bishops nested on b2/g2 (b7/g7) behind their pawns; resists trading them | 0.25 | Trade off the fianchetto bishop, then occupy the holes it guarded |
+| **WanderingQueen** | Brings the queen out early and keeps her roaming — rewards distance from home *and* centralization | 0.25 | Punishing early queen sorties with tempo |
+| **PawnStorm** | Values pawns advanced toward your king (summed across all pawns, so it accumulates fast) | 0.25 | Defending pawn storms; counterplay in the centre while it commits on the wing |
+| **Fianchetto** | Wants a bishop nested on g2/b2 (g7/b7) behind its pawn, and clings to it | 0.25 | Trade off the fianchetto bishop, then occupy the dark squares it was guarding |
+
+### Tuning the style weights
+
+Two lessons from getting these to actually show up in games:
+
+**The horizon problem.** Fianchetto originally only scored the bishop
+*once it reached* g7. But getting there takes g6, then Bg7 — and at
+depth 3 the engine cannot see that payoff from far enough away to start
+the journey. It fianchettoed in only 3 of 6 games. The fix was to reward
+the **preparatory pawn move** on its own (g6/b6 earns a bonus even before
+the bishop arrives). Now it commits in 5 of 6 games and will sometimes
+open 1...b6. If a personality isn't expressing itself, ask whether the
+reward is beyond its search horizon before assuming the weight is too low.
+
+**Bad proxies.** WanderingQueen originally rewarded raw distance from
+d1/d8, which meant a queen on a8 scored well while doing nothing. Adding
+a centralization term made the bias unmistakable — it now plays 2...Qd6
+and keeps her roaming, which costs it about two pawns a game. That is the
+punishable price the trainer needs.
+
+Sanity check when tuning: play the personality against Beginner for 20
+moves and check material. **Within ±2 pawns of even means biased, not
+broken** — it should pay a small price for its obsession, not collapse.
+PawnStorm needed no bump; its bonus sums across all eight pawns and
+accumulates on its own.
 
 ### Randomness (`RANDOM_MARGIN`)
 

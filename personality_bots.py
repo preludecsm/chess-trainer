@@ -539,11 +539,20 @@ class WanderingQueenSearchBot(SearchingPersonality):
     RANDOM_MARGIN = 0.25
     HOME = {chess.WHITE: chess.D1, chess.BLACK: chess.D8}
 
+    CENTRE = chess.SquareSet([chess.D4, chess.E4, chess.D5, chess.E5,
+                             chess.C4, chess.F4, chess.C5, chess.F5])
+
     def style_for(self, board: chess.Board, color: chess.Color) -> float:
+        """
+        Wants the queen out and roaming — the further from home and the
+        more central, the better. She will come out early and stay out,
+        which costs tempo and invites attack. That is the lesson.
+        """
         bonus = 0.0
         for square in board.pieces(chess.QUEEN, color):
-            bonus += 0.10                                  # keep the queen on
-            bonus += 0.05 * chess.square_distance(square, self.HOME[color])
+            bonus += 0.12 * chess.square_distance(square, self.HOME[color])
+            if square in self.CENTRE:
+                bonus += 0.25                              # queen in the middle
         return bonus
 
 
@@ -610,15 +619,32 @@ class FianchettoSearchBot(SearchingPersonality):
     RANDOM_MARGIN = 0.25
     NEST = {chess.WHITE: (chess.B2, chess.G2), chess.BLACK: (chess.B7, chess.G7)}
     SHELTER = {chess.WHITE: (chess.B3, chess.G3), chess.BLACK: (chess.B6, chess.G6)}
+    HOME = {chess.WHITE: (chess.C1, chess.F1), chess.BLACK: (chess.C8, chess.F8)}
 
     def style_for(self, board: chess.Board, color: chess.Color) -> float:
+        """
+        Wants a bishop nested on g2/b2 (g7/b7) behind its own pawn, and
+        clings to it. The weights are deliberately large enough that it
+        will fianchetto in positions where it is a bad idea — which is
+        the point: the weakness has to be visible to be punishable.
+        """
         bonus = 0.0
         bishops = board.pieces(chess.BISHOP, color)
-        for square in self.NEST[color]:
-            if square in bishops:
-                bonus += 0.25                                # bishop in the nest
-        for square in self.SHELTER[color]:
-            piece = board.piece_at(square)
-            if piece and piece.piece_type == chess.PAWN and piece.color == color:
-                bonus += 0.10                                # sheltering pawn
+        pawns = board.pieces(chess.PAWN, color)
+
+        for nest, shelter, home in zip(self.NEST[color], self.SHELTER[color],
+                                       self.HOME[color]):
+            has_bishop = nest in bishops
+            has_shelter = shelter in pawns
+            if has_bishop:
+                bonus += 0.55                       # bishop in the nest
+                if has_shelter:
+                    bonus += 0.35                   # ...and it has its pawn
+            elif has_shelter:
+                # The preparatory pawn move is rewarded on its own, so the
+                # engine will play g6/b6 even though the bishop has not
+                # arrived yet — otherwise the payoff is beyond its horizon.
+                bonus += 0.30
+                if home in bishops:
+                    bonus += 0.20                   # bishop still home, ready
         return bonus
