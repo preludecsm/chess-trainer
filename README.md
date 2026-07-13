@@ -23,12 +23,14 @@ Chess/                      <- this repo
 ├── README.md               <- this file
 ├── personality_bots.py     <- engines & personalities (canonical copy)
 ├── homemade_personalities.py  <- lichess-bot adapters (canonical copy)
-├── switch.sh               <- change personality/depth (in PATH via symlink)
-├── startbot.sh             <- check/start the bot (in PATH via symlink)
+├── switch.sh               <- change personality/depth LIVE (no restart)
+├── startbot.sh             <- check/start the bot if it's down
+├── restartbot.sh           <- full restart (only for code/policy changes)
 ├── deploy.sh               <- copy the two .py files into lichess-bot/
 └── lichess-bot/            <- upstream clone: NOT tracked here (.gitignore)
     ├── config.yml          <- SENSITIVE: contains the API token
-    ├── engine_depth.txt    <- current search depth
+    ├── engine_personality.txt  <- current personality (read per game)
+    ├── engine_depth.txt        <- current search depth (read per game)
     └── venv/               <- python environment
 ```
 
@@ -70,14 +72,27 @@ Apple Shortcut     (Tailscale)      │ edit config.yml + depth       ▲
   that evaluation — so style emerges from search, not from a book, and it
   will happily pursue its style into positions where that's a bad idea.
   That is the point: the weakness is legible and punishable.
-- **homemade_personalities.py** — thin adapters exposing each bot to
-  lichess-bot as a named homemade engine. Reads depth from
-  `engine_depth.txt` (default 4). Adding a class here automatically makes
-  it a valid `switch.sh` argument.
-- **switch.sh** — rewrites config.yml (engine name, greeting, accepted
-  time controls per depth), writes the depth file, restarts the bot.
+- **homemade_personalities.py** — a single `Personality` engine class
+  registered with lichess-bot. It reads `engine_personality.txt` and
+  `engine_depth.txt` **at the start of every game**, so the personality
+  can change while the bot stays connected. Add a class to the
+  `PERSONALITIES` dict and it becomes a valid `switch.sh` argument.
+- **switch.sh** — writes the two files. Takes effect on your next game;
+  **no restart, no reconnect**, so it can be run as often as you like.
+- **restartbot.sh** — a genuine restart, with a cold-down wait. Needed
+  only after code changes (`./deploy.sh`) or when switch.sh says the
+  accepted time controls changed.
 - **startbot.sh** — idempotent check-and-start; also run at boot by
   `~/Library/LaunchAgents/com.mick.chessbot.plist`.
+
+### Why switching doesn't restart the bot
+
+Lichess **rate-limits reconnections** to its event stream, per token. The
+original design restarted lichess-bot on every personality change, which
+made a handful of quick switches lock the bot out for many minutes. Now
+the process stays connected permanently and only the two text files
+change. Restarts are rare, and `restartbot.sh` waits 60 s with nothing
+connected before reconnecting — which is what actually clears the limit.
 
 ## Personalities
 
@@ -156,13 +171,19 @@ increment isn't counted.)
 
 ```bash
 switch.sh                          # show current personality/depth + menu
-switch.sh PawnStorm                # change personality, keep depth
-switch.sh depth 3                  # change depth, keep personality
+switch.sh PawnStorm                # change personality  (takes effect next game)
+switch.sh depth 3                  # change depth        (takes effect next game)
 switch.sh WanderingQueen depth 3   # change both
 startbot.sh                        # is it running? start it if not
+restartbot.sh                      # full restart - only after ./deploy.sh
+tmux capture-pane -pt chessbot | tail -20   # peek at the log
 tmux attach -t chessbot            # live log (Ctrl-b, release, d to leave)
-tmux capture-pane -pt chessbot | tail -20   # peek without attaching
 ```
+
+**switch.sh is free to run.** It writes two text files; the connected bot
+reads them when your next game starts. Switch personalities between every
+game if you like. Only *code* changes need `./deploy.sh && restartbot.sh`,
+and restarts are what trip Lichess's rate limit — so do them sparingly.
 
 Challenge **MickTrainerBot** from the main account
 (https://lichess.org/@/MickTrainerBot — green dot = bot online). Set the
@@ -214,7 +235,10 @@ sed -i '' 's/opponent_name = event\["game"\]/opponent_name = event.get("game", {
 #    https://lichess.org/account/oauth/token/create?scopes[]=bot:play
 cp config.yml.default config.yml
 #    edit config.yml: set token; engine: dir ".", protocol "homemade",
-#    name "Beginner"
+#    name "Personality"   <- constant; the personality itself lives in
+#                            engine_personality.txt and is read per game
+echo "Beginner" > engine_personality.txt
+echo "3" > engine_depth.txt
 
 # 5. Challenge policy (one-time config edits)
 sed -i '' '/^    - rated/d' config.yml                       # casual only
@@ -234,8 +258,9 @@ python3 lichess-bot.py -u
 
 # 7. Persistent run + control scripts in PATH
 chmod +x ../switch.sh ../startbot.sh ../deploy.sh
-ln -s ~/Documents/Mick/Chess/switch.sh   /opt/homebrew/bin/switch.sh
-ln -s ~/Documents/Mick/Chess/startbot.sh /opt/homebrew/bin/startbot.sh
+ln -s ~/Documents/Mick/Chess/switch.sh     /opt/homebrew/bin/switch.sh
+ln -s ~/Documents/Mick/Chess/startbot.sh   /opt/homebrew/bin/startbot.sh
+ln -s ~/Documents/Mick/Chess/restartbot.sh /opt/homebrew/bin/restartbot.sh
 startbot.sh          # creates tmux session "chessbot" and starts the bot
 
 # 8. Start at boot (auto-login makes login ≈ boot)
@@ -314,7 +339,8 @@ returns.
 | Behavior differs from repo code | Edited here but not deployed — `./deploy.sh` then restart |
 | Bot plays weakly / low accuracy | Raise depth (`switch.sh depth 4`, classical only). If it moves in ~1s AND blunders, that is the root-window bug — see "The bug that mattered" |
 | Bot moves suspiciously fast | Depth 3 should take ~15s in a middlegame. Instant moves mean the search is not running — check the engine file actually deployed (`./deploy.sh`) |
-| `RateLimitedError` in the log | Too many restarts in quick succession. Wait 1–2 minutes; do NOT restart again — it re-triggers the limit |
+| `RateLimitedError` in the log | Too many restarts. The retry loop itself re-triggers the limit, so it may not clear on its own: `pkill -9 -f lichess-bot.py; tmux kill-server`, wait 5 min with NOTHING running, then `startbot.sh`. Note switch.sh no longer restarts, so this should now be rare |
+| Personality change didn't take | It applies to the NEXT game, not the current one. Check `cat lichess-bot/engine_personality.txt` |
 | Bot plays the same moves every game | `RANDOM_MARGIN` is 0 for that personality — set it to 0.25 |
 
 ## Security notes
