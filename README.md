@@ -10,6 +10,13 @@ Built on [lichess-bot](https://github.com/lichess-bot-devs/lichess-bot)
 with custom Python engines (this repository) plugged in as "homemade"
 engines.
 
+> **Working on this project?** Read [NOTES.md](NOTES.md) first — it has the
+> design rationale, the experiments that were tried and measured and
+> rejected (transposition table, mobility eval, delta pruning), the bug
+> signatures worth recognising, and the workflow traps. The code does not
+> explain *why*, and several plausible "improvements" have already been
+> disproven with numbers.
+
 > **Personal project.** This is the working runbook for my own setup —
 > account names, paths, and hardware (a Mac mini under
 > `~/Documents/Mick/Chess`) are mine. Everything here is adaptable, but
@@ -228,10 +235,31 @@ tmux capture-pane -pt chessbot | tail -20   # peek at the log
 tmux attach -t chessbot            # live log (Ctrl-b, release, d to leave)
 ```
 
-**switch.sh is free to run.** It writes two text files; the connected bot
-reads them when your next game starts. Switch personalities between every
-game if you like. Only *code* changes need `./deploy.sh && restartbot.sh`,
-and restarts are what trip Lichess's rate limit — so do them sparingly.
+### Three kinds of change, three procedures
+
+| Change | What to do |
+|---|---|
+| **Personality or depth** | `switch.sh Fianchetto depth 3` — writes two text files, read at the start of your next game. **No restart.** Free to run as often as you like. |
+| **Engine code** (`personality_bots.py`, `homemade_personalities.py`) | `./deploy.sh` **and then `restartbot.sh`** |
+| **config.yml** (greeting, time controls, allow_list) | Edit directly, then `restartbot.sh` |
+
+**The trap:** `./deploy.sh` alone is *not enough* for code changes. It
+copies the file into `lichess-bot/`, but the running Python process has
+already imported the old module into memory and will keep executing it.
+Only a restart forces a fresh import. This bit us twice — every grep said
+the new engine was in place, and the bot kept playing the old one.
+
+**Restarts are expensive.** Lichess rate-limits reconnections to its
+event stream, per token. Several restarts in quick succession lock the
+bot out for many minutes, and the retry loop can re-arm the limit so it
+does not clear on its own. `restartbot.sh` waits 60 s with nothing
+connected — which is what actually clears it. **Batch changes, restart
+once.** If it gets wedged: `pkill -9 -f lichess-bot.py; tmux kill-server`,
+then wait 5+ minutes with *nothing* running before starting again.
+
+The decisive check after any engine change: **does Fianchetto open with
+1...b6 or 1...g6?** If not, the deployed engine is stale regardless of
+what the greps say.
 
 Challenge **MickTrainerBot** from the main account
 (https://lichess.org/@/MickTrainerBot — green dot = bot online). Set the
