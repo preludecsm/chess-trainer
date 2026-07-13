@@ -637,14 +637,14 @@ class FianchettoSearchBot(SearchingPersonality):
             has_bishop = nest in bishops
             has_shelter = shelter in pawns
             if has_bishop:
-                bonus += 0.55                       # bishop in the nest
+                bonus += 1.00                       # bishop in the nest
                 if has_shelter:
-                    bonus += 0.35                   # ...and it has its pawn
+                    bonus += 0.50                   # ...and it has its pawn
             elif has_shelter:
                 # The preparatory pawn move is rewarded on its own, so the
                 # engine will play g6/b6 even though the bishop has not
                 # arrived yet — otherwise the payoff is beyond its horizon.
-                bonus += 0.30
+                bonus += 0.70
                 if home in bishops:
-                    bonus += 0.20                   # bishop still home, ready
+                    bonus += 0.30                   # bishop still home, ready
         return bonus
