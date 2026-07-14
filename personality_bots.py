@@ -570,7 +570,7 @@ class PawnStormSearchBot(SearchingPersonality):
             advance = (chess.square_rank(square) - 1 if color == chess.WHITE
                        else 6 - chess.square_rank(square))
             file_gap = abs(chess.square_file(square) - chess.square_file(enemy_king))
-            bonus += 0.05 * advance * (2.0 - 0.4 * min(file_gap, 4))
+            bonus += 0.2 * advance * (2.0 - 0.4 * min(file_gap, 4))
         return bonus
 
 

@@ -131,7 +131,7 @@ connected before reconnecting — which is what actually clears the limit.
 | **Beginner** | No stylistic bias — plain positional search | 0.25 | Clean baseline opponent at any depth |
 | **SafeRandom** | Random among all moves within ¾ pawn of best: never blunders within its horizon, never has a plan | 0.75 | Punishing planlessness; converting small edges |
 | **WanderingQueen** | Brings the queen out early and keeps her roaming — rewards distance from home *and* centralization | 0.25 | Punishing early queen sorties with tempo |
-| **PawnStorm** | Values pawns advanced toward your king (summed across all pawns, so it accumulates fast) | 0.25 | Defending pawn storms; counterplay in the centre while it commits on the wing |
+| **PawnStorm** | Values pawns advanced toward your king, summed across all pawns | 0.25 | Defending pawn storms; counterplay in the centre while it commits on the wing |
 | **Fianchetto** | Wants a bishop nested on g2/b2 (g7/b7) behind its pawn, and clings to it | 0.25 | Trade off the fianchetto bishop, then occupy the dark squares it was guarding |
 
 ### Tuning the style weights
@@ -153,11 +153,19 @@ a centralization term made the bias unmistakable — it now plays 2...Qd6
 and keeps her roaming, which costs it about two pawns a game. That is the
 punishable price the trainer needs.
 
+**Weak weights hide in plain sight.** PawnStorm's per-pawn coefficient
+had sat at 0.05 since it was written, on the assumption that summing
+across all eight pawns would make it accumulate fast enough on its own.
+A real game showed otherwise — no storming, just book opening theory,
+because a two-square opening push only nets ~0.20 pawns of bonus at that
+weight. Bumped to 0.2 (same 4x ratio as the Fianchetto fix above), which
+brings an early push's bonus to ~0.8 pawns. Lesson: a formula that *looks*
+like it should compound into a visible bias still needs checking against
+a real game, not just the math.
+
 Sanity check when tuning: play the personality against Beginner for 20
 moves and check material. **Within ±2 pawns of even means biased, not
 broken** — it should pay a small price for its obsession, not collapse.
-PawnStorm needed no bump; its bonus sums across all eight pawns and
-accumulates on its own.
 
 ### Randomness (`RANDOM_MARGIN`)
 
@@ -302,9 +310,18 @@ echo 'from homemade_personalities import *  # noqa: F401,F403' >> homemade.py
 # (line must start at column 0)
 python3 -c "import homemade; print('OK:', homemade.Beginner.__name__)"
 
-# 3. Upstream patch (KeyError 'game' on correspondence ping;
-#    re-check after any git pull of lichess-bot)
+# 3. Upstream patches (re-check both after any git pull of lichess-bot;
+#    full rationale for each is in NOTES.md)
+#    3a. KeyError 'game' on correspondence ping
 sed -i '' 's/opponent_name = event\["game"\]/opponent_name = event.get("game", {})/' lib/lichess_bot.py
+#    3b. Control stream hammers the rate-limited endpoint every 1s
+#        instead of honoring the server's advised wait, which can turn
+#        one network hiccup into a lockout of many minutes. Patch
+#        watch_control_stream in lib/lichess_bot.py to catch
+#        lichess.RateLimitedError specifically and sleep for
+#        exception.timeout instead of falling through to the generic
+#        `except Exception: time.sleep(1)` — see NOTES.md for the exact
+#        diff, it's not a one-line sed.
 
 # 4. Lichess account: create a NEW account (bot upgrade requires zero
 #    games played), then a token with bot:play scope:
@@ -415,7 +432,7 @@ returns.
 | Behavior differs from repo code | Edited here but not deployed — `./deploy.sh` then restart |
 | Bot plays weakly / low accuracy | Raise depth (`switch.sh depth 4`, classical only). If it moves in ~1s AND blunders, that is the root-window bug — see "The bug that mattered" |
 | Bot moves suspiciously fast | Depth 3 should take ~15s in a middlegame. Instant moves mean the search is not running — check the engine file actually deployed (`./deploy.sh`) |
-| `RateLimitedError` in the log | Too many restarts. The retry loop itself re-triggers the limit, so it may not clear on its own: `pkill -9 -f lichess-bot.py; tmux kill-server`, wait 5 min with NOTHING running, then `startbot.sh`. Note switch.sh no longer restarts, so this should now be rare |
+| `RateLimitedError` in the log | Check `lichess_bot_auto_logs/lichess-bot.log` (has far more history than tmux scrollback). If it's the control stream and patch 3b (see Install, step 3) isn't applied, apply it — the unpatched code hammers the rate-limited endpoint every 1s and can turn one hiccup into a long lockout. Either way, if it's currently stuck: `pkill -9 -f lichess-bot.py; tmux kill-server`, wait 5 min with NOTHING running, then `startbot.sh` |
 | Personality change didn't take | It applies to the NEXT game, not the current one. Check `cat lichess-bot/engine_personality.txt` |
 | Bot plays the same moves every game | `RANDOM_MARGIN` is 0 for that personality — set it to 0.25 |
 

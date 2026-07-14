@@ -131,6 +131,19 @@ beyond its search horizon before assuming the weight is too low.
 d1/d8 — so a queen on a8 scored well while doing nothing. Adding a
 centralization term made the bias unmistakable.
 
+**Weak weights hide in plain sight.** PawnStorm's per-pawn coefficient
+sat at `0.05` since it was first written, on the assumption that summing
+across all eight pawns would make it accumulate fast enough on its own.
+It didn't — a real game (2026-07-13) showed no storming at all, just
+book opening theory, because a two-square opening push only nets ~0.20
+pawns of bonus at that weight, too small to beat normal development at a
+3-ply search. Bumped `0.05 → 0.2` (same 4x ratio as the Fianchetto fix)
+to bring an early push's bonus to ~0.8 pawns. Unlike Fianchetto this bias
+is incremental rather than a single-trigger reward, so it shouldn't have
+a horizon problem — but it hadn't been checked against a real game before
+now. Don't assume a bias is fine just because the formula looks like it
+should compound; verify against an actual game.
+
 **Sanity check when tuning:** play the personality against Beginner for
 20 moves and check material. **Within ±2 pawns of even = biased, not
 broken.** It should pay a small price for its obsession, not collapse.
@@ -168,10 +181,10 @@ not, the deployed engine is stale regardless of what the greps say.
 
 ---
 
-## Upstream patch (re-apply after any `git pull` in lichess-bot/)
+## Upstream patches (re-apply after any `git pull` in lichess-bot/)
 
-lichess-bot has a bug: `KeyError: 'game'` in
-`check_in_on_correspondence_games`. Fixed with:
+**1. Correspondence-game KeyError.** lichess-bot has a bug: `KeyError: 'game'`
+in `check_in_on_correspondence_games`. Fixed with:
 
 ```bash
 sed -i '' 's/opponent_name = event\["game"\]/opponent_name = event.get("game", {})/' lib/lichess_bot.py
@@ -179,6 +192,49 @@ sed -i '' 's/opponent_name = event\["game"\]/opponent_name = event.get("game", {
 
 (Currently moot — correspondence games are declined — but it will bite if
 that ever changes.)
+
+**2. Control-stream rate-limit hammering (found 2026-07-13).** The bot
+would repeatedly get stuck rate-limited on `/api/stream/event` for many
+minutes, sometimes recurring within one game, and would *not* clear on
+its own — only a full process kill + 5 min of nothing connecting fixed
+it. Root cause found in the auto log
+(`lichess_bot_auto_logs/lichess-bot.log`, which retains far more history
+than the tmux pane scrollback and is the right place to look first next
+time this happens):
+
+- The actual trigger is a `TimeoutError` (SSL handshake or socket read
+  timeout) on the long-lived control stream — a real, if infrequent,
+  network hiccup, not abuse. This part is environmental (Wi-Fi/Tailscale)
+  and not something to chase in the code.
+- The bug that turned one hiccup into a long lockout: `watch_control_stream`
+  in `lib/lichess_bot.py` catches *any* exception — including
+  `lichess.RateLimitedError`, which carries the server's actual advised
+  wait time (`exception.timeout`) — and unconditionally does
+  `time.sleep(1)` before retrying. That means once rate-limited, it was
+  re-hitting the rate-limited endpoint roughly once a second instead of
+  waiting out the advised window, which looks like abusive reconnect
+  behavior to Lichess and plausibly kept re-arming the block.
+
+Fix: catch `lichess.RateLimitedError` specifically in
+`watch_control_stream` and sleep for `exception.timeout` (+1s margin)
+instead of the flat 1s used for other errors:
+
+```python
+        except lichess.RateLimitedError as exception:
+            wait = to_seconds(exception.timeout) + 1
+            logger.warning(f"Control stream is rate limited. Waiting {wait:.0f}s before reconnecting "
+                            "(instead of hammering the endpoint every 1s).")
+            time.sleep(wait)
+        except Exception:
+            logger.warning(f"Control stream error, reconnecting:\n{traceback.format_exc()}")
+            time.sleep(1)
+```
+
+This is a real code fix, not just a workaround — but it can't undo an
+*existing* lockout retroactively. If the bot is already stuck when this
+patch goes in, still do the full kill + 5-minute-clean-wait once; the
+patch's job is to stop that from being necessary again for future
+timeouts.
 
 ---
 
