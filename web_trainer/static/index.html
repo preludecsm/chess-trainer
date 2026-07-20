@@ -141,6 +141,17 @@
   .thinking {
     color: #e0a030;
   }
+  #helpPanel {
+    font-size: 12.5px;
+    color: #bbb;
+    line-height: 1.5;
+    border-top: 1px solid #333;
+    margin-top: 10px;
+  }
+  #helpPanel p { margin: 4px 0 8px; }
+  #helpPanel dl { margin: 4px 0 10px; }
+  #helpPanel dt { font-weight: 600; color: #ddd; margin-top: 6px; }
+  #helpPanel dd { margin: 0 0 2px 12px; }
   .reviewing {
     color: #e0a030;
   }
@@ -191,6 +202,7 @@
           <label id="depthLabel">Depth</label>
           <input type="number" id="depth" value="3" min="1" max="8" style="width:50px;">
         </div>
+        <button id="helpBtn" class="secondary" title="What do these mean?" style="align-self:flex-end; border-radius:50%; width:28px; height:28px; padding:0;">?</button>
       </div>
       <div class="row">
         <div>
@@ -202,6 +214,28 @@
         </div>
         <button id="newGame">New Game</button>
         <button id="takeback" class="secondary">Take Back</button>
+      </div>
+      <div id="helpPanel" style="display:none;">
+        <label style="margin-top:10px;">The personalities</label>
+        <p>Each opponent has a deliberate, exploitable bias — it will pursue
+        its obsession even where that's a bad idea. Learning to spot and
+        punish the pattern is the training.</p>
+        <dl>
+          <dt>Beginner</dt><dd>No bias — a clean, honest opponent at any depth.</dd>
+          <dt>SafeRandom</dt><dd>Never blunders outright, but has no plan at all.
+            Practice building and converting small advantages.</dd>
+          <dt>WanderingQueen</dt><dd>Brings the queen out early and keeps her
+            roaming. Attack her while developing — win the game on tempo.</dd>
+          <dt>PawnStorm</dt><dd>Hurls pawns at your king. Stay calm, defend
+            precisely, and strike back in the center it left behind.</dd>
+          <dt>Fianchetto</dt><dd>Must have its bishop on the long diagonal and
+            clings to it. Trade that bishop off, then own the weak squares.</dd>
+        </dl>
+        <label>Depth</label>
+        <p>How many half-moves ahead the bot calculates — its strength dial.
+        Higher is stronger but slower to move: depth 2 is instant but weak,
+        depth 3 is the sweet spot (a few seconds per move), and each step
+        above that multiplies the wait.</p>
       </div>
     </div>
 
@@ -610,6 +644,10 @@ function takeback() {
 document.getElementById('newGame').addEventListener('click', startNewGame);
 document.getElementById('takeback').addEventListener('click', takeback);
 document.getElementById('showHints').addEventListener('change', () => renderTopMoves(lastTopLines));
+document.getElementById('helpBtn').addEventListener('click', () => {
+  const p = document.getElementById('helpPanel');
+  p.style.display = p.style.display === 'none' ? 'block' : 'none';
+});
 document.getElementById('navFirst').addEventListener('click', () => jumpToPly(0));
 document.getElementById('navBack').addEventListener('click', () => jumpToPly(viewPly - 1));
 document.getElementById('navForward').addEventListener('click', () => jumpToPly(viewPly + 1));
