@@ -34,8 +34,7 @@ Cheap wins worth evaluating before scaling hardware:
 |---|---|---|
 | **PyPy** instead of CPython | **MEASURED 2026-07-19 (`bench_engine.py`): 3× mean, 4–5× once the JIT warms** (10.5s → 3.5s mean per depth-3 move; steady-state ~2.2s; identical moves chosen). Full stack verified under PyPy 3.11 — flask, python-chess, Stockfish UCI, hardening. `run.sh` now prefers the `venv-pypy` venv. **Decision: build the deploy image on PyPy.** | Done locally |
 | Iterative deepening + TT | **Done 2026-07-20**: depth 3 unchanged, depth 4 1.6× faster (~13s/move locally). | Done |
-| Time-budgeted search | **Done 2026-07-20**: `think_time` param, safe mid-iteration abort, `last_depth` reports what was reached. First deploy used `DEFAULT_THINK_TIME=8`, which turned out to let hard positions fall back all the way to depth 2 (weak) on t4g — a real inconsistency, not just a latency wobble. Re-measured and fixed same day: `DEFAULT_THINK_TIME=18` (`MAX_THINK_TIME=25`) guarantees **depth 3 as a floor** on t4g regardless of position — depth 4 only ever adds, never subtracts. Worst-case move time ~19s. See "Depth-3 floor" below for the full investigation. | Done |
-| Time-budgeted search | A hard per-move CPU ceiling regardless of position — the right *public* interface even if depth stays the internal dial | Small, pairs with iterative deepening |
+| Time-budgeted search | Built, verified, then **reverted the same day**: it correctly guaranteed a depth-3 floor with depth-4 bonus, but the underlying idea — the bot might silently search less than requested — was still the wrong shape for what "predictable" turned out to mean. Replaced by hard-locking hosted to `FIXED_DEPTH=3`: one depth, always, no per-request override, no fallback logic to reason about. Full story in NOTES.md and below. | Reverted → replaced |
 
 ## Architecture options
 
@@ -121,7 +120,7 @@ Option A is live:
 | Elastic IP | 44.227.208.213 (`eipalloc-04e1966634d26100d`) |
 | Security group | `sg-080c28ba615f5e647` — port 22 from home IP only, port 80 from CloudFront origin-facing prefix list only |
 | ECR image | `175691005574.dkr.ecr.us-west-2.amazonaws.com/chess-trainer:latest` |
-| Container env | `MAX_DEPTH=4 DEFAULT_THINK_TIME=18 MAX_THINK_TIME=25 RATE_LIMIT_PER_MIN=10 WEB_CONCURRENCY=2` |
+| Container env | `FIXED_DEPTH=3 RATE_LIMIT_PER_MIN=10 WEB_CONCURRENCY=2` |
 | CPU credits | Instance is in **Unlimited** mode (checked 2026-07-20) — under sustained load it keeps bursting at full speed rather than throttling to baseline; the cost is billed overage, not a performance cliff. Balance was healthy (~440+, stable) as of the check. |
 | SSH | `ssh -i ~/.ssh/chess-trainer-key.pem ec2-user@44.227.208.213` |
 
@@ -138,7 +137,7 @@ ssh -i ~/.ssh/chess-trainer-key.pem ec2-user@44.227.208.213 \
    && docker pull 175691005574.dkr.ecr.us-west-2.amazonaws.com/chess-trainer:latest \
    && docker rm -f trainer \
    && docker run -d --name trainer --restart always -p 80:5001 \
-        -e MAX_DEPTH=4 -e DEFAULT_THINK_TIME=18 -e MAX_THINK_TIME=25 \
+        -e FIXED_DEPTH=3 \
         -e RATE_LIMIT_PER_MIN=10 -e WEB_CONCURRENCY=2 \
         175691005574.dkr.ecr.us-west-2.amazonaws.com/chess-trainer:latest"
 ```
@@ -188,21 +187,25 @@ overage instead of degrading silently. One less risk than initially
 flagged; still worth knowing this is a cost lever, not just a
 performance one, under real concurrent-user load.
 
-**Fix shipped**: raise the budget so depth 3 always completes, on the
-current instance, at zero added cost — `DEFAULT_THINK_TIME=18` (measured
-worst-case depth-3 was 13.12s; that leaves real margin), `MAX_THINK_TIME=25`.
-Depth 4 becomes pure bonus on easy positions, never a step down from the
-calibrated baseline. Verified on all three benchmark positions: opening
-reaches depth 4, both hard middlegames floor at depth 3 (worst-case
-latency ~19s, bounded and known). The UI now also displays the depth
-actually reached when it falls short of the request, so any remaining
-variance (3 vs 4) is visible rather than silent — the instance/budget
-question was never really about eliminating variance, it was about
-making sure it never becomes invisible or falls below the design floor.
+**First fix shipped, same day**: raised the budget so depth 3 always
+completed — `DEFAULT_THINK_TIME=18`, `MAX_THINK_TIME=25`. Verified on all
+three benchmark positions: opening reached depth 4, both hard
+middlegames floored at depth 3 (worst-case latency ~19s, bounded and
+known). This genuinely worked, and worked as designed.
 
-The instance-upgrade lever (`c8g.large`) remains available later if the
-depth-4 bonus case matters enough to be worth ~2-4x the monthly cost —
-not needed today.
+**Then reverted, same day, after actually playing it.** Depth 4 felt
+sluggish in practice, and thinking through why surfaced the real
+problem: a budget-with-fallback is still a mechanism whose job is to
+*sometimes give a different depth than requested*, no matter how well
+that fallback is bounded. That's the opposite of what "predictable"
+meant. **Final answer: `FIXED_DEPTH=3`** — one depth, always, in full,
+no client override, no fallback path to reason about at all. Simpler
+than the budget system it replaced, and it's what was actually wanted.
+The instance-upgrade lever (`c8g.large`) and the local depth-4/depth-5+
+options remain available — `FIXED_DEPTH` only applies to hosted; local
+keeps the full depth selector, uncapped, with the explicit understanding
+that a slow move locally is fine to just wait out or abandon, unlike a
+stranger hitting the hosted instance.
 
 ## Suggested sequence
 

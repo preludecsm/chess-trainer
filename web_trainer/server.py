@@ -36,34 +36,22 @@ PERSONALITIES = {
 STOCKFISH_PATH = os.environ.get("STOCKFISH_PATH", "/opt/homebrew/bin/stockfish")
 EVAL_TIME = 0.5   # seconds per eval call; MultiPV=2 for the top-2 lines
 MIN_DEPTH = 1
-# Depth is a cost dial an attacker can turn (depth 4+ = minutes of CPU per
-# request), so public deployments set MAX_DEPTH=3 in the environment.
 MAX_DEPTH = max(MIN_DEPTH, min(8, int(os.environ.get("MAX_DEPTH", "8"))))
+
+# When set, every move is searched to exactly this depth, in full, no
+# matter what the client requests -- no cap-with-fallback, no time budget.
+# This is the public deployment's whole answer to "predictable, not a
+# silent failover to a weaker move": a fixed, always-completed search.
+# See NOTES.md/MIGRATION.md 2026-07-20 for why the time-budget approach
+# (tried first) was rejected in favor of this.
+_fixed_depth_env = os.environ.get("FIXED_DEPTH", "").strip()
+FIXED_DEPTH = int(_fixed_depth_env) if _fixed_depth_env else None
 
 # Per-IP rate limiting: bot moves are the expensive resource. In-memory
 # token bucket, per gunicorn worker (workers don't share state, so the
 # effective allowance is bucket_size x workers -- fine at this scale).
 # 0 disables (the local default); public deployments set e.g. 10.
 RATE_LIMIT_PER_MIN = int(os.environ.get("RATE_LIMIT_PER_MIN", "0"))
-
-# Think-time budget (seconds) for iterative deepening. When
-# DEFAULT_THINK_TIME > 0 (public deployments), every move is budgeted and
-# clients cannot disable it — only pick a value in [1, MAX_THINK_TIME].
-# With 0 (local default) budgets are opt-in per request via "thinkTime".
-DEFAULT_THINK_TIME = float(os.environ.get("DEFAULT_THINK_TIME", "0"))
-MAX_THINK_TIME = float(os.environ.get("MAX_THINK_TIME", "60"))
-
-
-def effective_think_time(requested) -> float:
-    """Resolve a client's requested budget against deployment policy."""
-    try:
-        t = float(requested) if requested is not None else DEFAULT_THINK_TIME
-    except (TypeError, ValueError):
-        raise ValueError("thinkTime must be a number")
-    if DEFAULT_THINK_TIME > 0:
-        t = t if t > 0 else DEFAULT_THINK_TIME
-        return max(1.0, min(MAX_THINK_TIME, t))
-    return max(0.0, min(MAX_THINK_TIME, t))
 
 app = Flask(__name__, static_folder="static", static_url_path="")
 # Vendored libs/piece images are immutable; without this Flask sends
@@ -168,8 +156,7 @@ def index():
 def config():
     """Deployment limits, so the UI can reflect them instead of silently clamping."""
     return jsonify({"maxDepth": MAX_DEPTH,
-                    "defaultThinkTime": DEFAULT_THINK_TIME,
-                    "maxThinkTime": MAX_THINK_TIME,
+                    "fixedDepth": FIXED_DEPTH,
                     "personalities": sorted(PERSONALITIES)})
 
 
@@ -213,10 +200,9 @@ def bot_move():
     try:
         board = _parse_board(data)
         depth = int(data.get("depth", 3))
-        think_time = effective_think_time(data.get("thinkTime"))
     except (ValueError, TypeError) as exc:
         return jsonify({"error": f"bad request: {exc}"}), 400
-    depth = max(MIN_DEPTH, min(MAX_DEPTH, depth))
+    depth = FIXED_DEPTH if FIXED_DEPTH else max(MIN_DEPTH, min(MAX_DEPTH, depth))
     personality = data.get("personality", "Beginner")
 
     if board.is_game_over():
@@ -224,11 +210,10 @@ def bot_move():
     if personality not in PERSONALITIES:
         return jsonify({"error": f"Unknown personality: {personality}"}), 400
 
-    bot = PERSONALITIES[personality](depth=depth,
-                                     think_time=think_time or None)
+    bot = PERSONALITIES[personality](depth=depth)
     move = bot.select(board)
     san = board.san(move)
-    return jsonify({"uci": move.uci(), "san": san, "depth": bot.last_depth})
+    return jsonify({"uci": move.uci(), "san": san, "depth": depth})
 
 
 if __name__ == "__main__":

@@ -64,7 +64,17 @@ to play; `Ctrl-C` when done.
   it cost relative to the engine's top choice.
 - **Take Back** undoes your last full exchange. **⏮ ◀ ▶ ⏭** step
   through the game history (board is read-only while reviewing).
-- Personality and depth are per-game dropdowns in the UI.
+- **Resign** ends the game early (Take Back can undo it, same as any
+  other move). **Copy PGN** copies the full game to your clipboard at
+  any point, including after it's over. **Analyze on Lichess** opens
+  whatever position is currently on the board in Lichess's analysis tool.
+- Personality is a per-game dropdown. **Depth is a per-game dropdown
+  locally (1–8, uncapped); the hosted deployment fixes it at a single
+  depth (3) with no client override** — one depth, always, in full,
+  rather than a cap-with-fallback that can silently search less than
+  requested. See NOTES.md and MIGRATION.md — a time-budgeted fallback
+  was tried first and reverted the same day once it turned out to feel
+  inconsistent in practice, even though it worked exactly as designed.
 - **No deploy step, but restarts matter**: `server.py` imports
   `personality_bots.py` at startup. `index.html` changes are live on
   refresh; **engine changes need the server restarted** — Python caches

@@ -20,13 +20,8 @@ homemade_personalities.py (the dormant lichess-bot adapter).
 """
 
 import random
-import time
 import chess
 import chess.polyglot
-
-
-class _OutOfTime(Exception):
-    """Raised inside the search when the think-time budget expires."""
 
 PIECE_VALUES = {
     chess.PAWN: 1, chess.KNIGHT: 3, chess.BISHOP: 3,
@@ -150,16 +145,8 @@ class FourPlyBot:
     # Transposition-table bound flags.
     TT_EXACT, TT_LOWER, TT_UPPER = 0, 1, 2
 
-    def __init__(self, depth: int = 4, think_time: float | None = None):
+    def __init__(self, depth: int = 4):
         self.depth = depth
-        # Optional wall-clock budget in seconds. Iterative deepening stops
-        # (mid-iteration if necessary) once it expires, and the move comes
-        # from the last COMPLETED iteration — depth is then a cap, not a
-        # promise. last_depth reports what was actually reached.
-        self.think_time = think_time or None
-        self.last_depth = 0
-        self._deadline: float | None = None
-        self._nodes = 0
         # Which side the bot is playing this move; set at the root by
         # select() so asymmetric personality biases (SYMMETRIC_STYLE =
         # False) know whose style to score at every node of the search.
@@ -309,7 +296,6 @@ class FourPlyBot:
         until the position is quiet, so we never evaluate mid-exchange.
         In check there is no 'quiet': all evasions are searched instead.
         """
-        self._check_time()
         in_check = board.is_check()
         moves = list(board.legal_moves)
         if not moves:
@@ -337,15 +323,7 @@ class FourPlyBot:
                 break
         return best
 
-    def _check_time(self) -> None:
-        # Cheap counter, real clock read only every 256 nodes.
-        self._nodes += 1
-        if self._deadline is not None and (self._nodes & 255) == 0 \
-                and time.monotonic() > self._deadline:
-            raise _OutOfTime()
-
     def _negamax(self, board, depth, alpha, beta) -> float:
-        self._check_time()
         if board.is_checkmate():
             return -1000 - depth              # prefer faster mates
         if board.is_stalemate() or board.is_insufficient_material() \
@@ -407,6 +385,13 @@ class FourPlyBot:
         make the deepest pass prune far better — this is what makes the TT
         pay (a bare TT was measured as a net slowdown; see NOTES.md).
 
+        Always searches to self.depth in full -- no time budget or early
+        abort. (A think-time-driven abort-and-fall-back-a-depth mode was
+        tried and removed: it meant deeper depth settings could silently
+        turn into a weaker move on a hard position, which is exactly the
+        inconsistency this project's design deliberately avoids. See
+        NOTES.md.)
+
         Every root move gets a FULL window at every depth: narrowing alpha
         at the root would make later moves return fail-low bounds rather
         than true scores, and those bogus values would tie with the best
@@ -414,43 +399,17 @@ class FourPlyBot:
         """
         self._bot_color = board.turn
         self._tt = {}
-        self._nodes = 0
-        self._deadline = None
-        # Search a copy: a mid-iteration _OutOfTime unwinds through pushed
-        # moves without popping them, which would corrupt the caller's board.
-        search_board = board.copy()
-        root_moves = self._ordered_moves(search_board)
+        root_moves = self._ordered_moves(board)
         scores: dict = {}
 
-        # Depth 1 always completes (it's milliseconds) so there is always a
-        # full iteration to fall back on; the budget clock starts after it.
-        for move in root_moves:
-            search_board.push(move)
-            scores[move] = -self._negamax(search_board, 0,
-                                          -float("inf"), float("inf"))
-            search_board.pop()
-        self.last_depth = 1
-        if self.think_time:
-            self._deadline = time.monotonic() + self.think_time
-
-        for d in range(2, self.depth + 1):
-            root_moves.sort(key=lambda m: scores[m], reverse=True)
-            iter_scores: dict = {}
-            try:
-                for move in root_moves:
-                    search_board.push(move)
-                    iter_scores[move] = -self._negamax(search_board, d - 1,
-                                                       -float("inf"),
-                                                       float("inf"))
-                    search_board.pop()
-            except _OutOfTime:
-                # Discard the partial iteration: mixing depths at the root
-                # would make scores incomparable (the root-window lesson,
-                # in a different costume).
-                break
-            scores = iter_scores
-            self.last_depth = d
-        self._deadline = None
+        for d in range(1, self.depth + 1):
+            if scores:
+                root_moves.sort(key=lambda m: scores[m], reverse=True)
+            for move in root_moves:
+                board.push(move)
+                scores[move] = -self._negamax(board, d - 1,
+                                              -float("inf"), float("inf"))
+                board.pop()
         return scores
 
     def select(self, board: chess.Board) -> chess.Move:

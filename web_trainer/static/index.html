@@ -183,7 +183,6 @@
     <div id="board"></div>
     <div id="status" style="margin-top:10px;"></div>
     <div id="feedback"></div>
-    <div id="lastBotDepth" style="font-size:12px; color:#888; margin-top:2px;"></div>
   </div>
 
   <div class="sidebar">
@@ -202,10 +201,7 @@
         <div>
           <label id="depthLabel">Depth</label>
           <input type="number" id="depth" value="3" min="1" max="8" style="width:50px;">
-        </div>
-        <div>
-          <label id="thinkLabel" title="0 = no limit">Max think (s)</label>
-          <input type="number" id="thinkTime" value="0" min="0" max="60" style="width:55px;">
+          <span id="depthFixedNote" style="display:none; font-size:13px;">3</span>
         </div>
         <button id="helpBtn" class="secondary" title="What do these mean?" style="align-self:flex-end; border-radius:50%; width:28px; height:28px; padding:0;">?</button>
       </div>
@@ -219,6 +215,11 @@
         </div>
         <button id="newGame">New Game</button>
         <button id="takeback" class="secondary">Take Back</button>
+        <button id="resign" class="secondary">Resign</button>
+      </div>
+      <div class="row" style="margin-bottom:0;">
+        <button id="copyPgn" class="secondary">Copy PGN</button>
+        <button id="analyzeLichess" class="secondary">Analyze on Lichess ↗</button>
       </div>
       <div id="helpPanel" style="display:none;">
         <label style="margin-top:10px;">The personalities</label>
@@ -237,16 +238,16 @@
             clings to it. Trade that bishop off, then own the weak squares.</dd>
         </dl>
         <label>Depth</label>
-        <p>How many half-moves ahead the bot calculates — its strength dial.
-        Higher is stronger but slower to move: depth 2 is instant but weak,
-        depth 3 is the sweet spot (a few seconds per move), and each step
-        above that multiplies the wait.</p>
-        <label>Max think</label>
-        <p>A time budget in seconds. The bot searches progressively deeper
-        until time runs out, then plays the best move from the deepest fully
-        finished look-ahead — so depth becomes a cap, not a promise. 0 means
-        no limit (where allowed). Handy with depth 4: quiet positions get
-        the full depth, complicated ones answer on time anyway.</p>
+        <p id="depthHelpText">How many half-moves ahead the bot calculates —
+        its strength dial. Higher is stronger but slower to move: depth 2 is
+        instant but weak, depth 3 is the sweet spot (a few seconds per move),
+        and each step above that multiplies the wait.</p>
+        <label>Resign / Copy PGN / Analyze on Lichess</label>
+        <p>Resign ends the current game early (Take Back can undo it, like
+        any other move). Copy PGN copies the game — at any point, even
+        after it's over — to your clipboard for pasting elsewhere. Analyze
+        on Lichess opens whatever position is currently on the board in
+        Lichess's own analysis tool.</p>
       </div>
     </div>
 
@@ -284,6 +285,11 @@ let humanColor = 'w';
 let preMoveEval = null; // eval snapshot for the position before the human's move
 let awaitingBot = false;
 let viewPly = 0; // which half-move we're currently displaying; game.history().length == live
+let gameEndedManually = null; // null, or {winnerColor: 'w'|'b'} after a resignation
+
+function isGameOver() {
+  return game.game_over() || gameEndedManually !== null;
+}
 
 function pieceTheme(piece) {
   return 'vendor/img/chesspieces/wikipedia/' + piece + '.png';
@@ -297,16 +303,22 @@ function currentPersonality() {
 // server-side (the hosted instance caps depth at 3; local allows 8).
 fetch('/api/config').then(r => r.json()).then(cfg => {
   const depthInput = document.getElementById('depth');
-  depthInput.max = cfg.maxDepth;
-  if (parseInt(depthInput.value, 10) > cfg.maxDepth) depthInput.value = cfg.maxDepth;
-  document.getElementById('depthLabel').textContent = 'Depth (max ' + cfg.maxDepth + ')';
-  const thinkInput = document.getElementById('thinkTime');
-  thinkInput.max = cfg.maxThinkTime;
-  if (cfg.defaultThinkTime > 0) {
-    // Budgets are mandatory on this deployment; 0 isn't an option.
-    thinkInput.value = cfg.defaultThinkTime;
-    thinkInput.min = 1;
-    document.getElementById('thinkLabel').title = 'always budgeted on this server';
+  if (cfg.fixedDepth) {
+    // This deployment always searches to exactly this depth: no cap-with-
+    // fallback, no client control. Consistency over reach -- see NOTES.md.
+    depthInput.style.display = 'none';
+    const note = document.getElementById('depthFixedNote');
+    note.textContent = cfg.fixedDepth;
+    note.style.display = 'inline';
+    document.getElementById('depthLabel').textContent = 'Depth (fixed)';
+    document.getElementById('depthHelpText').textContent =
+      'This server always searches to exactly depth ' + cfg.fixedDepth +
+      ' — never deeper, never shallower — so every move takes a similar,' +
+      ' predictable amount of time regardless of the position.';
+  } else {
+    depthInput.max = cfg.maxDepth;
+    if (parseInt(depthInput.value, 10) > cfg.maxDepth) depthInput.value = cfg.maxDepth;
+    document.getElementById('depthLabel').textContent = 'Depth (max ' + cfg.maxDepth + ')';
   }
 }).catch(() => {});
 
@@ -375,7 +387,7 @@ function jumpToPly(ply) {
   clearHighlights();
 
   if (isLive()) {
-    if (game.game_over()) {
+    if (isGameOver()) {
       setStatus(describeGameOver());
     } else {
       setStatus((game.turn() === humanColor ? (humanColor === 'w' ? 'White' : 'Black') + ' to move'
@@ -399,6 +411,7 @@ function setStatus(text, cls) {
   document.getElementById('navBack').disabled = awaitingBot || viewPly === 0;
   document.getElementById('navForward').disabled = awaitingBot || viewPly === game.history().length;
   document.getElementById('navLive').disabled = awaitingBot || live;
+  document.getElementById('resign').disabled = awaitingBot || isGameOver() || !live;
 }
 
 async function fetchEval(fen) {
@@ -412,8 +425,6 @@ async function fetchEval(fen) {
 
 async function fetchBotMove(fen, personality, depth) {
   const body = {fen: fen, personality: personality, depth: depth};
-  const think = parseFloat(document.getElementById('thinkTime').value);
-  if (think > 0) body.thinkTime = think;
   const res = await fetch('/api/bot-move', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
@@ -435,7 +446,7 @@ function renderTopMoves(lines) {
   //   - game over           -> show freely
   lastTopLines = lines || [];
   const el = document.getElementById('topMoves');
-  const gameLive = !game.game_over();
+  const gameLive = !isGameOver();
 
   if (gameLive && game.turn() !== humanColor) {
     el.innerHTML = '<div class="move-line"><span>--</span><span>--</span></div>';
@@ -455,6 +466,9 @@ function renderTopMoves(lines) {
 }
 
 function describeGameOver() {
+  if (gameEndedManually) {
+    return (gameEndedManually.winnerColor === 'w' ? 'White' : 'Black') + ' wins by resignation';
+  }
   if (game.in_checkmate()) return (game.turn() === 'w' ? 'Black' : 'White') + ' wins by checkmate';
   if (game.in_stalemate()) return 'Draw by stalemate';
   if (game.in_threefold_repetition()) return 'Draw by repetition';
@@ -490,7 +504,7 @@ function evalSwingMessage(preData, postScoreWhitePov) {
 }
 
 async function maybeBotMove() {
-  if (game.game_over()) {
+  if (isGameOver()) {
     setStatus(describeGameOver());
     return;
   }
@@ -507,13 +521,6 @@ async function maybeBotMove() {
     awaitingBot = false;
     return;
   }
-  // Show what the bot actually reached, not just what was requested -- a
-  // time-budgeted search can complete short of the requested depth on a
-  // hard position, and that should be visible, not silent.
-  const depthNote = document.getElementById('lastBotDepth');
-  depthNote.textContent = (data.depth && data.depth < depth)
-    ? 'Searched to depth ' + data.depth + ' of ' + depth + ' (time budget)'
-    : (data.depth ? 'Searched to depth ' + data.depth : '');
   game.move({from: data.uci.slice(0, 2), to: data.uci.slice(2, 4), promotion: data.uci.slice(4) || undefined});
   viewPly = game.history().length;
   board.position(game.fen());
@@ -551,7 +558,7 @@ function isOwnPiece(square) {
 }
 
 function onDragStart(source, piece) {
-  if (game.game_over() || awaitingBot || !isLive()) return false;
+  if (isGameOver() || awaitingBot || !isLive()) return false;
   if (game.turn() !== humanColor) return false;
   if ((humanColor === 'w' && piece.search(/^b/) !== -1) ||
       (humanColor === 'b' && piece.search(/^w/) !== -1)) return false;
@@ -569,7 +576,6 @@ async function afterMove() {
   board.position(game.fen());
   renderMoveList();
   document.getElementById('feedback').textContent = '';
-  document.getElementById('lastBotDepth').textContent = '';
 
   if (game.game_over()) {
     setStatus(describeGameOver());
@@ -594,7 +600,7 @@ async function afterMove() {
 }
 
 function handleSquareTap(square) {
-  if (game.game_over() || awaitingBot || !isLive() || game.turn() !== humanColor) return;
+  if (isGameOver() || awaitingBot || !isLive() || game.turn() !== humanColor) return;
 
   if (selectedSquare && selectedSquare !== square) {
     const from = selectedSquare;
@@ -639,10 +645,10 @@ function onSnapEnd() {
 function startNewGame() {
   game.reset();
   viewPly = 0;
+  gameEndedManually = null;
   humanColor = document.getElementById('color').value === 'white' ? 'w' : 'b';
   preMoveEval = null;
   document.getElementById('feedback').textContent = '';
-  document.getElementById('lastBotDepth').textContent = '';
   board.orientation(humanColor === 'w' ? 'white' : 'black');
   board.position('start');
   renderMoveList();
@@ -654,6 +660,7 @@ function startNewGame() {
 function takeback() {
   if (awaitingBot || !isLive() || game.history().length === 0) return;
 
+  gameEndedManually = null; // takeback un-resigns too, if that's what ended it
   clearHighlights();
   // Undo until it's the human's turn again, so a takeback always removes
   // one full human+bot exchange (or just the bot's opening move, if the
@@ -667,14 +674,63 @@ function takeback() {
   board.position(game.fen());
   renderMoveList();
   document.getElementById('feedback').textContent = '';
-  document.getElementById('lastBotDepth').textContent = '';
   setStatus((humanColor === 'w' ? 'White' : 'Black') + ' to move');
   refreshEvalForCurrentPosition().then(data => { preMoveEval = data; });
   maybeBotMove(); // no-op if it's already the human's turn
 }
 
+function resign() {
+  if (awaitingBot || isGameOver() || !isLive()) return;
+  gameEndedManually = {winnerColor: humanColor === 'w' ? 'b' : 'w'};
+  clearHighlights();
+  setStatus(describeGameOver());
+  updateEvalBar(null);
+  renderTopMoves([]);
+}
+
+function gamePgn() {
+  const personality = document.getElementById('personality').value;
+  const white = humanColor === 'w' ? 'Human' : personality;
+  const black = humanColor === 'w' ? personality : 'Human';
+  let result = '*';
+  if (gameEndedManually) {
+    result = gameEndedManually.winnerColor === 'w' ? '1-0' : '0-1';
+  } else if (game.game_over()) {
+    result = game.in_draw() ? '1/2-1/2' : (game.turn() === 'w' ? '0-1' : '1-0');
+  }
+  game.header('Event', 'Personality Chess Trainer', 'Site', location.hostname || 'localhost',
+              'White', white, 'Black', black, 'Result', result);
+  return game.pgn();
+}
+
+async function copyPgn() {
+  const pgn = gamePgn();
+  const btn = document.getElementById('copyPgn');
+  const original = btn.textContent;
+  try {
+    await navigator.clipboard.writeText(pgn);
+    btn.textContent = 'Copied!';
+  } catch (e) {
+    // Clipboard API needs a secure context (https or localhost); fall back
+    // to a manual-copy prompt rather than failing silently.
+    window.prompt('Copy this PGN:', pgn);
+    btn.textContent = original;
+    return;
+  }
+  setTimeout(() => { btn.textContent = original; }, 1500);
+}
+
+function analyzeOnLichess() {
+  const fen = fenAtPly(viewPly);
+  window.open('https://lichess.org/analysis/standard/' + encodeURIComponent(fen),
+              '_blank', 'noopener');
+}
+
 document.getElementById('newGame').addEventListener('click', startNewGame);
 document.getElementById('takeback').addEventListener('click', takeback);
+document.getElementById('resign').addEventListener('click', resign);
+document.getElementById('copyPgn').addEventListener('click', copyPgn);
+document.getElementById('analyzeLichess').addEventListener('click', analyzeOnLichess);
 document.getElementById('showHints').addEventListener('change', () => renderTopMoves(lastTopLines));
 document.getElementById('helpBtn').addEventListener('click', () => {
   const p = document.getElementById('helpPanel');

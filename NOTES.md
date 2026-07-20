@@ -305,19 +305,27 @@ timeouts.
 - ~~Iterative deepening + TT~~ — done 2026-07-20 (see the TT entry
   above). Depth 4 is now ~13s/move locally. Still unbuilt from that
   project: **killer moves**, **aspiration windows**.
-- ~~Time-budgeted search~~ — done 2026-07-20, same day. `think_time`
-  seconds on any bot: iterative deepening runs on a **board copy** and
-  aborts mid-iteration past the deadline (an `_OutOfTime` exception,
-  checked every 256 nodes to keep `time.monotonic()` off the hot path),
-  falling back to the last *fully completed* iteration — never a mix of
-  depths at the root, which would resurrect the root-window bug in a
-  different form. `bot.last_depth` reports what was actually reached.
-  Depth 1 always completes first (milliseconds) so there's always a
-  fallback before the clock starts. This is what let the hosted depth
-  cap rise from 3 to 4: `MAX_DEPTH=4` + a mandatory `DEFAULT_THINK_TIME`
-  bounds worst-case move time regardless of position or host CPU speed —
-  t4g's slower core just settles for a completed depth 3 instead of
-  risking an incomplete depth 4, which is exactly the point.
+- ~~Time-budgeted search~~ — built 2026-07-20, **reverted the same day**.
+  `think_time` seconds on any bot: iterative deepening ran on a board
+  copy and aborted mid-iteration past a deadline, falling back to the
+  last fully-completed iteration (never mixed root depths, which would
+  have resurrected the root-window bug). Worked as designed — verified
+  live, t4g settling for a completed depth 3 instead of an incomplete
+  depth 4. But "worked as designed" turned out to be the wrong design:
+  even after tuning the budget so depth 3 was a guaranteed floor, the
+  underlying idea was still "the bot might quietly search less than you
+  asked for," and playing it revealed that's not what was wanted —
+  depth 4 felt sluggish, and a mechanism whose whole job is to *sometimes
+  give you a different search depth than requested* is inherently in
+  tension with predictability, no matter how the fallback is tuned.
+  Replaced by `FIXED_DEPTH`: hosted now searches to exactly one depth
+  (3), always, in full, with no per-request override and no abort path
+  at all. Simpler code, and it matches what was actually wanted rather
+  than what seemed clever. **Lesson: "verified live" isn't the same as
+  "validated against the actual goal" — the budget mechanism was
+  thoroughly tested and worked correctly, and was still the wrong
+  answer.** Iterative deepening + the TT stayed — that part was never
+  about time budgets, it's what makes deeper search fast at all.
 
 **Fianchetto needed re-tuning for depth 4 (2026-07-20, same session).**
 Verifying the above at depth 4 for the first time (previously
