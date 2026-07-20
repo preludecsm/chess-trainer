@@ -1,0 +1,8 @@
+lichess-bot/
+web_trainer/venv/
+web_trainer/venv-pypy/
+__pycache__/
+**/__pycache__/
+*.pdf
+.git/
+.DS_Store

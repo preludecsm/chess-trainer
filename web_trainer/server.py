@@ -33,7 +33,7 @@ PERSONALITIES = {
     "Fianchetto": FianchettoSearchBot,
 }
 
-STOCKFISH_PATH = "/opt/homebrew/bin/stockfish"
+STOCKFISH_PATH = os.environ.get("STOCKFISH_PATH", "/opt/homebrew/bin/stockfish")
 EVAL_TIME = 0.5   # seconds per eval call; MultiPV=2 for the top-2 lines
 MIN_DEPTH, MAX_DEPTH = 1, 8   # same clamp the lichess adapter used
 
