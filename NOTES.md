@@ -43,20 +43,43 @@ to be punishable.
 
 ---
 
+## Status (2026-07-19): Lichess decommissioned, web trainer primary
+
+The Lichess deployment is disabled (process killed, LaunchAgent renamed
+to `.plist.disabled`, PATH symlinks removed — reactivation steps in
+README's Legacy section). The active interface is `web_trainer/`. The
+API token in `lichess-bot/config.yml` remains live on disk until revoked.
+
 ## Workflow — read this carefully
 
-Three different kinds of change, three different procedures:
+The one trap that spans every interface this project has ever had:
+**Python caches imported modules in memory.** A running process keeps
+executing the old engine no matter what the files on disk say.
 
 | Change | What to do |
 |---|---|
-| **Personality or depth** | `switch.sh Fianchetto depth 3` — writes two text files, read at the start of the next game. **No restart.** |
-| **Engine code** (personality_bots.py, homemade_personalities.py) | `./deploy.sh` **then `restartbot.sh`** — Python caches imported modules in memory, so a running bot keeps executing the old code until the process restarts. |
-| **config.yml** (greeting, time controls, allow_list) | Edit directly, then `restartbot.sh` — read only at startup. |
+| **Engine code** (personality_bots.py) with web trainer running | Restart `web_trainer/server.py` (kill + `run.sh`). No deploy step — it imports the repo copy directly. |
+| **index.html** (web trainer UI) | Nothing — served fresh from disk; hard-refresh the browser. |
+| *(legacy)* Personality/depth on Lichess | `switch.sh Fianchetto depth 3` — two text files, read at next game start. No restart. |
+| *(legacy)* Engine code on Lichess | `./deploy.sh` **then `restartbot.sh`**. |
+| *(legacy)* config.yml | Edit, then `restartbot.sh` — read only at startup. |
 
 **The trap:** `deploy.sh` alone is not enough for code changes. It copies
 the file, but the running process has already imported the old module.
 This bit us twice — the bot kept playing the old engine while every grep
 said the new file was in place.
+
+**Same trap, different process (2026-07-18):** `web_trainer/server.py`
+imports `personality_bots.py` directly with no deploy step at all — but
+that only means edits reach it *on the next process start*. A running
+`server.py` has the old module cached exactly like the Lichess bot does.
+Caught this live: edited PawnStorm's bias, tested in the browser, still
+saw the old (buggy) behavior, because the server had been started before
+the edit. Kill and restart `web_trainer`'s `server.py` (or just use
+`run.sh`, which starts a fresh process each time) after any
+`personality_bots.py` change, same discipline as `restartbot.sh` for the
+Lichess side — just cheaper, since it's a local `kill` + relaunch, no
+rate limit to wait out.
 
 **Restarts are expensive.** Lichess rate-limits reconnections to
 `/api/stream/event` per token. Several restarts in quick succession locks
@@ -143,6 +166,24 @@ is incremental rather than a single-trigger reward, so it shouldn't have
 a horizon problem — but it hadn't been checked against a real game before
 now. Don't assume a bias is fine just because the formula looks like it
 should compound; verify against an actual game.
+
+**The weight bump wasn't the whole bug.** Even at `0.2`, PawnStorm as
+Black kept playing 1...d5 (Scandinavian) against 1.e4 — a second, deeper
+bad-proxy problem (2026-07-18). `style_for` measured file-distance from
+the enemy king's *current* square, and before castling that's still e1/e8
+— central. So the formula was rewarding central pawn pushes (d5/e5, small
+file-gap from e) over actual flank storms (f5/g5/h5, large file-gap from
+e) — backwards from the intended identity, and worse than useless before
+the opponent commits to a side. Fixed by assuming kingside castling
+(overwhelmingly the common case) as the target file whenever the enemy
+king is still on its home square, falling through to the real king square
+once it's moved. Confirmed fixed: Black now plays g5/h5-type pushes
+instead of d5, and self-play material vs. Beginner stayed within the
+usual ±2 pawn range. Lesson: proximity-to-a-square proxies need to ask
+*which* square is meaningful at the point in the game the bias is
+actually supposed to fire — a square that hasn't been committed to yet
+(home-square king) can point the incentive the wrong way entirely,
+not just weakly.
 
 **Sanity check when tuning:** play the personality against Beginner for
 20 moves and check material. **Within ±2 pawns of even = biased, not

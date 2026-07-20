@@ -1,15 +1,22 @@
 #!/usr/bin/env python3
 """
-Personality chess bots — a skeleton framework.
+Personality chess bots.
 
 Requires:  pip install chess
 
-Included personalities:
-  SafeRandomBot     - plays randomly, but never (knowingly) hangs a piece
-  WanderingQueenBot - loves moving the queen, the farther the better
-  PawnStormBot      - shoves pawns toward the enemy king
+One engine core (FourPlyBot: negamax + alpha-beta + quiescence, with a
+material/PST/pawn-structure/king-safety evaluation) and one personality
+per subclass of SearchingPersonality, each adding a small evaluation
+bias so style emerges from search rather than an opening book:
 
-Run directly for a terminal game:  python personality_bots.py
+  BeginnerSearchBot       - no bias; the clean baseline
+  SafeRandomSearchBot     - wide random margin: never blunders, never plans
+  WanderingQueenSearchBot - queen out early, roaming, centralized
+  PawnStormSearchBot      - pawns advanced toward the enemy king
+  FianchettoSearchBot     - bishops nested on the long diagonals
+
+Consumed by web_trainer/server.py (the primary interface) and
+homemade_personalities.py (the dormant lichess-bot adapter).
 """
 
 import random
@@ -105,7 +112,6 @@ DOUBLED_PAWN = -0.20
 ISOLATED_PAWN = -0.20
 PASSED_PAWN = (0.0, 0.10, 0.15, 0.25, 0.40, 0.65, 1.00, 0.0)  # by rank advanced
 BISHOP_PAIR = 0.30
-MOBILITY_WEIGHT = 0.02
 CASTLED_BONUS = 0.25
 
 
@@ -116,144 +122,16 @@ PST_SYMBOL = {
 
 
 # ----------------------------------------------------------------------
-# Shared tactical helper
+# Engine core
 # ----------------------------------------------------------------------
 
-def hanging_material(board: chess.Board, color: chess.Color) -> int:
+class FourPlyBot:
     """
-    Rough estimate of material `color` has en prise right now.
-
-    A piece counts as hanging if it is attacked by a cheaper piece,
-    or attacked while undefended. This is a heuristic, not a full
-    static exchange evaluation — deliberately imperfect, like a
-    human club player's quick scan.
-    """
-    total = 0
-    for square, piece in board.piece_map().items():
-        if piece.color != color or piece.piece_type == chess.KING:
-            continue
-        attackers = board.attackers(not color, square)
-        if not attackers:
-            continue
-        value = PIECE_VALUES[piece.piece_type]
-        cheapest = min(
-            PIECE_VALUES[board.piece_at(a).piece_type] for a in attackers
-        )
-        defenders = board.attackers(color, square)
-        if cheapest < value:
-            total += value - cheapest        # loses the exchange
-        elif not defenders:
-            total += value                   # free to take
-    return total
-
-
-def move_safety_score(board: chess.Board, move: chess.Move) -> float:
-    """
-    Score a move by immediate material consequences:
-      + value of anything we capture
-      - value of our material left hanging afterward
-      + big bonus for delivering checkmate
-    """
-    score = 0.0
-    if board.is_capture(move):
-        captured = board.piece_at(move.to_square)
-        if captured:                          # (en passant has no piece on to_square)
-            score += PIECE_VALUES[captured.piece_type]
-        else:
-            score += 1                        # en passant capture
-    board.push(move)
-    if board.is_checkmate():
-        score += 1000
-    score -= hanging_material(board, not board.turn)  # our color after push
-    board.pop()
-    return score
-
-
-# ----------------------------------------------------------------------
-# Personality framework
-# ----------------------------------------------------------------------
-
-class PersonalityBot:
-    """Base class: subclasses override style_bonus() and/or select()."""
-
-    name = "Base"
-
-    def style_bonus(self, board: chess.Board, move: chess.Move) -> float:
-        """Extra points for moves that fit the personality. Override me."""
-        return 0.0
-
-    def select(self, board: chess.Board) -> chess.Move:
-        """Default: safety score + style bonus, random among the best tier."""
-        moves = list(board.legal_moves)
-        scored = [
-            (move_safety_score(board, m) + self.style_bonus(board, m), m)
-            for m in moves
-        ]
-        best = max(s for s, _ in scored)
-        # "best tier" = within half a pawn of the top; adds variety
-        candidates = [m for s, m in scored if s >= best - 0.5]
-        return random.choice(candidates)
-
-
-class SafeRandomBot(PersonalityBot):
-    """Random moves, but filtered so it doesn't hang material."""
-
-    name = "SafeRandom"
-
-    def select(self, board: chess.Board) -> chess.Move:
-        moves = list(board.legal_moves)
-        scored = [(move_safety_score(board, m), m) for m in moves]
-        # Prefer any move that doesn't lose material; among those, pure random.
-        safe = [m for s, m in scored if s >= 0]
-        if safe:
-            return random.choice(safe)
-        # Everything loses something — pick the least bad option.
-        best = max(s for s, _ in scored)
-        return random.choice([m for s, m in scored if s == best])
-
-
-class WanderingQueenBot(PersonalityBot):
-    """Brings the queen out early and keeps her roaming."""
-
-    name = "WanderingQueen"
-
-    def style_bonus(self, board: chess.Board, move: chess.Move) -> float:
-        piece = board.piece_at(move.from_square)
-        if piece and piece.piece_type == chess.QUEEN:
-            distance = chess.square_distance(move.from_square, move.to_square)
-            return 2.0 + 0.3 * distance      # queen moves, long ones best
-        return 0.0
-
-
-class PawnStormBot(PersonalityBot):
-    """Advances pawns toward the enemy king's side of the board."""
-
-    name = "PawnStorm"
-
-    def style_bonus(self, board: chess.Board, move: chess.Move) -> float:
-        piece = board.piece_at(move.from_square)
-        if not piece or piece.piece_type != chess.PAWN:
-            return 0.0
-        enemy_king = board.king(not board.turn)
-        if enemy_king is None:
-            return 0.0
-        file_gap = abs(
-            chess.square_file(move.to_square) - chess.square_file(enemy_king)
-        )
-        advance = chess.square_rank(move.to_square) - chess.square_rank(move.from_square)
-        if board.turn == chess.BLACK:
-            advance = -advance
-        # reward pushing pawns, especially near the enemy king's file
-        return advance * (2.0 - 0.4 * min(file_gap, 4))
-
-
-class FourPlyBot(PersonalityBot):
-    """
-    Plain alpha-beta search to a fixed depth (default 4 plies) with a
-    material-plus-centralization evaluation. No quiescence search, so it
-    suffers from the horizon effect — it will sometimes start a capture
-    sequence it can't finish seeing. For a trainer, that's a feature:
-    it plays sound tactical chess but can be outcalculated.
+    Alpha-beta (negamax) search to a fixed depth, with quiescence search
+    at the horizon so captures are resolved before a leaf is evaluated —
+    this is what stops it blundering material mid-exchange. Evaluation
+    covers material, piece-square tables, pawn structure, king safety
+    (tapered by game phase), and the bishop pair.
     """
 
     name = "FourPly"
@@ -562,55 +440,31 @@ class PawnStormSearchBot(SearchingPersonality):
     RANDOM_MARGIN = 0.25
 
     def style_for(self, board: chess.Board, color: chess.Color) -> float:
-        enemy_king = board.king(not color)
+        enemy_color = not color
+        enemy_king = board.king(enemy_color)
         if enemy_king is None:
             return 0.0
+        enemy_home = chess.E1 if enemy_color == chess.WHITE else chess.E8
+        if enemy_king == enemy_home:
+            # The enemy hasn't castled yet, so their home-square king is
+            # still central -- aiming at it literally rewards central pawn
+            # play (d5/e5) over real flank storms (f5/g5/h5), which is
+            # backwards. Assume kingside castling, by far the common case,
+            # so there's a real storm target from move one. Once the enemy
+            # actually castles (or gets flushed off e1/e8 some other way)
+            # this falls through to their true square below.
+            target_square = chess.G1 if enemy_color == chess.WHITE else chess.G8
+        else:
+            target_square = enemy_king
+        target_file = chess.square_file(target_square)
+
         bonus = 0.0
         for square in board.pieces(chess.PAWN, color):
             advance = (chess.square_rank(square) - 1 if color == chess.WHITE
                        else 6 - chess.square_rank(square))
-            file_gap = abs(chess.square_file(square) - chess.square_file(enemy_king))
+            file_gap = abs(chess.square_file(square) - target_file)
             bonus += 0.2 * advance * (2.0 - 0.4 * min(file_gap, 4))
         return bonus
-
-
-# ----------------------------------------------------------------------
-# Terminal play loop
-# ----------------------------------------------------------------------
-
-BOTS = {"1": SafeRandomBot, "2": WanderingQueenBot,
-        "3": PawnStormBot, "4": FourPlyBot}
-
-
-def play():
-    print("Choose your opponent:")
-    print("  1) SafeRandom   2) WanderingQueen   3) PawnStorm")
-    bot = BOTS.get(input("> ").strip(), SafeRandomBot)()
-    human_is_white = input("Play as White? [Y/n] ").strip().lower() != "n"
-
-    board = chess.Board()
-    while not board.is_game_over():
-        print("\n" + str(board) + "\n")
-        if (board.turn == chess.WHITE) == human_is_white:
-            move = None
-            while move is None:
-                text = input("Your move (SAN, e.g. Nf3): ").strip()
-                try:
-                    move = board.parse_san(text)
-                except ValueError:
-                    print("Illegal or unparseable — try again.")
-            board.push(move)
-        else:
-            move = bot.select(board)
-            print(f"{bot.name} plays: {board.san(move)}")
-            board.push(move)
-
-    print("\n" + str(board))
-    print("Game over:", board.result(), "-", board.outcome().termination.name)
-
-
-if __name__ == "__main__":
-    play()
 
 
 class FianchettoSearchBot(SearchingPersonality):
