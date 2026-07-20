@@ -21,6 +21,7 @@ homemade_personalities.py (the dormant lichess-bot adapter).
 
 import random
 import chess
+import chess.polyglot
 
 PIECE_VALUES = {
     chess.PAWN: 1, chess.KNIGHT: 3, chess.BISHOP: 3,
@@ -141,12 +142,23 @@ class FourPlyBot:
          chess.C6, chess.D6, chess.E6, chess.F6]
     )
 
+    # Transposition-table bound flags.
+    TT_EXACT, TT_LOWER, TT_UPPER = 0, 1, 2
+
     def __init__(self, depth: int = 4):
         self.depth = depth
         # Which side the bot is playing this move; set at the root by
         # select() so asymmetric personality biases (SYMMETRIC_STYLE =
         # False) know whose style to score at every node of the search.
         self._bot_color = chess.WHITE
+        # Transposition table, cleared per select() call. Entries:
+        # zobrist -> (draft, flag, score, best_move). An entry searched to
+        # draft >= the remaining depth can answer the probe (per its bound
+        # flag); shallower entries still donate their best move for
+        # ordering. This only pays off combined with iterative deepening
+        # (see select) — a bare TT was tried in 2026-07 and was a net
+        # slowdown (9.2% hit rate) because nothing seeded it.
+        self._tt: dict = {}
 
     def _phase(self, board: chess.Board) -> float:
         """1.0 = full middlegame, 0.0 = bare endgame. Tapers the king table."""
@@ -320,35 +332,82 @@ class FourPlyBot:
         if depth == 0:
             return self._quiesce(board, alpha, beta)
 
+        key = chess.polyglot.zobrist_hash(board)
+        tt_move = None
+        entry = self._tt.get(key)
+        if entry is not None:
+            e_draft, e_flag, e_score, tt_move = entry
+            if e_draft >= depth:
+                if e_flag == self.TT_EXACT:
+                    return e_score
+                if e_flag == self.TT_LOWER:
+                    alpha = max(alpha, e_score)
+                elif e_flag == self.TT_UPPER:
+                    beta = min(beta, e_score)
+                if alpha >= beta:
+                    return e_score
+
+        alpha_orig = alpha
+        moves = self._ordered_moves(board)
+        if tt_move is not None and tt_move in moves:
+            # Previous iteration's best move first: this ordering is most
+            # of what makes iterative deepening + TT pay for itself.
+            moves.remove(tt_move)
+            moves.insert(0, tt_move)
+
         best = -float("inf")
-        for move in self._ordered_moves(board):
+        best_move = None
+        for move in moves:
             board.push(move)
             score = -self._negamax(board, depth - 1, -beta, -alpha)
             board.pop()
-            best = max(best, score)
+            if score > best:
+                best = score
+                best_move = move
             alpha = max(alpha, score)
             if alpha >= beta:
                 break                          # prune
 
+        if best <= alpha_orig:
+            flag = self.TT_UPPER               # fail-low: true score <= best
+        elif best >= beta:
+            flag = self.TT_LOWER               # fail-high: true score >= best
+        else:
+            flag = self.TT_EXACT
+        self._tt[key] = (depth, flag, best, best_move)
         return best
 
-    def select(self, board: chess.Board) -> chess.Move:
+    def _root_scores(self, board: chess.Board) -> dict:
         """
-        Root search. Every root move gets a FULL window: narrowing alpha
-        here would make later moves return fail-low bounds rather than
-        true scores, and those bogus values would tie with the best and
-        get picked at random. (This bug made the bot play nonsense.)
+        Iterative deepening: search depth 1, 2, ... self.depth, keeping the
+        transposition table across iterations and re-ordering root moves by
+        the previous iteration's scores. The shallow passes are cheap and
+        make the deepest pass prune far better — this is what makes the TT
+        pay (a bare TT was measured as a net slowdown; see NOTES.md).
+
+        Every root move gets a FULL window at every depth: narrowing alpha
+        at the root would make later moves return fail-low bounds rather
+        than true scores, and those bogus values would tie with the best
+        and get picked at random. (This bug made the bot play nonsense.)
         """
         self._bot_color = board.turn
-        scored = []
-        for move in self._ordered_moves(board):
-            board.push(move)
-            score = -self._negamax(board, self.depth - 1,
-                                   -float("inf"), float("inf"))
-            board.pop()
-            scored.append((score, move))
-        best = max(s for s, _ in scored)
-        best_moves = [m for s, m in scored if abs(s - best) <= 1e-9]
+        self._tt = {}
+        root_moves = self._ordered_moves(board)
+        scores: dict = {}
+        for d in range(1, self.depth + 1):
+            if scores:
+                root_moves.sort(key=lambda m: scores[m], reverse=True)
+            for move in root_moves:
+                board.push(move)
+                scores[move] = -self._negamax(board, d - 1,
+                                              -float("inf"), float("inf"))
+                board.pop()
+        return scores
+
+    def select(self, board: chess.Board) -> chess.Move:
+        scores = self._root_scores(board)
+        best = max(scores.values())
+        best_moves = [m for m, s in scores.items() if abs(s - best) <= 1e-9]
         return random.choice(best_moves)
 
 
@@ -397,17 +456,10 @@ class SearchingPersonality(FourPlyBot):
     def select(self, board: chess.Board) -> chess.Move:
         if self.RANDOM_MARGIN <= 0:
             return super().select(board)
-        self._bot_color = board.turn
-        # Full-window score for every root move, then random within margin.
-        scored = []
-        for move in self._ordered_moves(board):
-            board.push(move)
-            score = -self._negamax(board, self.depth - 1,
-                                   -float("inf"), float("inf"))
-            board.pop()
-            scored.append((score, move))
-        best = max(s for s, _ in scored)
-        candidates = [m for s, m in scored if s >= best - self.RANDOM_MARGIN]
+        scores = self._root_scores(board)
+        best = max(scores.values())
+        candidates = [m for m, s in scores.items()
+                      if s >= best - self.RANDOM_MARGIN]
         return random.choice(candidates)
 
 

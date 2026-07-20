@@ -93,12 +93,17 @@ kill-server`, then wait 5+ minutes with nothing running.
 
 ## What's been tried and rejected (with measurements)
 
-**Transposition table** — 9.2% hit rate, net *slower*. The TT key
-includes depth, so entries from a depth-2 search do not serve a depth-3
-probe, and hashing/storing 14k positions cost more than it saved. A TT
-only pays off alongside **iterative deepening** (search depth 1, 2, 3…
-reusing the table and the previous iteration's best move for ordering).
-That is the correct next performance project if depth 4+ is ever needed.
+**Transposition table (bare, 2026-07)** — 9.2% hit rate, net *slower*.
+The TT key includes depth, so entries from a depth-2 search do not serve
+a depth-3 probe, and hashing/storing 14k positions cost more than it
+saved. A TT only pays off alongside **iterative deepening**.
+*Resolved 2026-07-20*: ID+TT landed (draft-based probing, bound flags,
+TT-move-first ordering, root re-ordering by previous iteration). Measured
+under PyPy: depth 3 a wash (3.45s vs 3.46s mean — shallow-pass overhead
+cancels TT gains), **depth 4 1.6× faster** (41.9s → 26.7s over two
+middlegames, ~13s/move mean), identical moves both depths. Known caveat:
+`can_claim_draw()` is history-dependent, so repetition-tinted scores can
+be cached — acceptable for a trainer, would matter for a real engine.
 
 **Mobility term in the evaluation** (bonus per legal move) — profiling
 showed it consumed **65% of total evaluation time**. Generating legal
@@ -297,9 +302,11 @@ timeouts.
 
 ## Ideas not yet built
 
-- **Iterative deepening + TT + killer moves** — the real performance fix.
-  Would make depth 5–6 practical. Worth doing *only* when depth 3 stops
-  beating him.
+- ~~Iterative deepening + TT~~ — done 2026-07-20 (see the TT entry
+  above). Depth 4 is now ~13s/move locally. Still unbuilt from that
+  project: **killer moves**, **aspiration windows**, and a
+  **time-budgeted search** ("think for 5s") — the last one is what
+  would give consistent move times on any hardware, including hosted.
 - **More eval knowledge** — rook on open files, outposts, passed-pawn
   blockades.
 - **New personalities** — Simplifier (trades when ahead), Hypermodern.

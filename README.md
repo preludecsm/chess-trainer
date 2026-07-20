@@ -192,13 +192,12 @@ a distance).
 
 Recorded so they aren't retried blindly:
 
-- **Transposition table.** Added, measured, removed. Hit rate was only
-  9.2% — the TT key includes depth, so entries from a depth-2 search
-  don't serve a depth-3 probe, and it cost more to hash and store 14k
-  positions than it saved. A TT only pays off alongside **iterative
-  deepening** (search depth 1, 2, 3… reusing the table and the previous
-  iteration's best move for ordering). That is the correct next
-  performance project, and it would make depth 4–5 practical.
+- **Bare transposition table** (no iterative deepening). Added, measured,
+  removed. Hit rate was only 9.2% — the TT key includes depth, so entries
+  from a depth-2 search don't serve a depth-3 probe, and it cost more to
+  hash and store 14k positions than it saved. *The full ID+TT combination
+  landed 2026-07-20 and does pay: depth 4 is 1.6× faster (~13s/move
+  locally under PyPy), depth 3 unchanged. Details in NOTES.md.*
 - **Mobility term in the evaluation** (bonus per legal move). Profiling
   showed it consumed ~65% of total evaluation time — generating legal
   moves at every leaf is too expensive in Python — for less strength than

@@ -33,7 +33,7 @@ Cheap wins worth evaluating before scaling hardware:
 | Option | Expected effect | Effort |
 |---|---|---|
 | **PyPy** instead of CPython | **MEASURED 2026-07-19 (`bench_engine.py`): 3× mean, 4–5× once the JIT warms** (10.5s → 3.5s mean per depth-3 move; steady-state ~2.2s; identical moves chosen). Full stack verified under PyPy 3.11 — flask, python-chess, Stockfish UCI, hardening. `run.sh` now prefers the `venv-pypy` venv. **Decision: build the deploy image on PyPy.** | Done locally |
-| Iterative deepening + TT | The known correct next perf project (NOTES.md) — makes deeper search practical, allows time-budgeted moves ("think for 5s" instead of "depth 3") | Medium |
+| Iterative deepening + TT | **Done 2026-07-20**: depth 3 unchanged, depth 4 1.6× faster (~13s/move locally). Hosted depth cap stays 3 (t4g depth 4 would still be ~40s+). Time-budgeted search remains the follow-up that would fix hosted move-time consistency | Done |
 | Time-budgeted search | A hard per-move CPU ceiling regardless of position — the right *public* interface even if depth stays the internal dial | Small, pairs with iterative deepening |
 
 ## Architecture options
