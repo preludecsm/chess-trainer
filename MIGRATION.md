@@ -108,6 +108,42 @@ Small: retry-with-backoff on 429/503, a "server busy" status line, and a
 footer (license attributions + "moves may take ~15s" expectation-setting).
 Everything else already works — the UI is stateless against the same API.
 
+## Deployed (2026-07-19)
+
+Option A is live:
+
+| Piece | Value |
+|---|---|
+| URL | https://dty47fe9cic2a.cloudfront.net |
+| CloudFront distribution | `E34DPKJWVJ2M2Z` (CachingDisabled policy; static edge-caching is a future optimization) |
+| EC2 instance | `i-07eaf30b71b79b2cd`, t4g.small, us-west-2, AL2023 arm64 |
+| Elastic IP | 44.227.208.213 (`eipalloc-04e1966634d26100d`) |
+| Security group | `sg-080c28ba615f5e647` — port 22 from home IP only, port 80 from CloudFront origin-facing prefix list only |
+| ECR image | `175691005574.dkr.ecr.us-west-2.amazonaws.com/chess-trainer:latest` |
+| Container env | `MAX_DEPTH=3 RATE_LIMIT_PER_MIN=10 WEB_CONCURRENCY=2` |
+| SSH | `ssh -i ~/.ssh/chess-trainer-key.pem ec2-user@44.227.208.213` |
+
+**To redeploy after a code change** (from the repo root):
+
+```bash
+docker build -t chess-trainer .
+aws ecr get-login-password | docker login --username AWS --password-stdin 175691005574.dkr.ecr.us-west-2.amazonaws.com
+docker tag chess-trainer:latest 175691005574.dkr.ecr.us-west-2.amazonaws.com/chess-trainer:latest
+docker push 175691005574.dkr.ecr.us-west-2.amazonaws.com/chess-trainer:latest
+ECR_PW=$(aws ecr get-login-password)
+ssh -i ~/.ssh/chess-trainer-key.pem ec2-user@44.227.208.213 \
+  "echo '$ECR_PW' | docker login --username AWS --password-stdin 175691005574.dkr.ecr.us-west-2.amazonaws.com \
+   && docker pull 175691005574.dkr.ecr.us-west-2.amazonaws.com/chess-trainer:latest \
+   && docker rm -f trainer \
+   && docker run -d --name trainer --restart always -p 80:5001 \
+        -e MAX_DEPTH=3 -e RATE_LIMIT_PER_MIN=10 -e WEB_CONCURRENCY=2 \
+        175691005574.dkr.ecr.us-west-2.amazonaws.com/chess-trainer:latest"
+```
+
+Note: home IP changes break SSH access (rule is /32-scoped) — update with
+`aws ec2 authorize-security-group-ingress`. Measured on t4g.small: depth-3
+middlegame ~15s cold, improving as the PyPy JIT warms.
+
 ## Suggested sequence
 
 1. ~~Benchmark PyPy locally~~ **Done (2026-07-19)**: 3–5×, full stack

@@ -35,7 +35,16 @@ PERSONALITIES = {
 
 STOCKFISH_PATH = os.environ.get("STOCKFISH_PATH", "/opt/homebrew/bin/stockfish")
 EVAL_TIME = 0.5   # seconds per eval call; MultiPV=2 for the top-2 lines
-MIN_DEPTH, MAX_DEPTH = 1, 8   # same clamp the lichess adapter used
+MIN_DEPTH = 1
+# Depth is a cost dial an attacker can turn (depth 4+ = minutes of CPU per
+# request), so public deployments set MAX_DEPTH=3 in the environment.
+MAX_DEPTH = max(MIN_DEPTH, min(8, int(os.environ.get("MAX_DEPTH", "8"))))
+
+# Per-IP rate limiting: bot moves are the expensive resource. In-memory
+# token bucket, per gunicorn worker (workers don't share state, so the
+# effective allowance is bucket_size x workers -- fine at this scale).
+# 0 disables (the local default); public deployments set e.g. 10.
+RATE_LIMIT_PER_MIN = int(os.environ.get("RATE_LIMIT_PER_MIN", "0"))
 
 app = Flask(__name__, static_folder="static", static_url_path="")
 
@@ -70,6 +79,38 @@ def _kill_engine() -> None:
 @atexit.register
 def _shutdown() -> None:
     _kill_engine()
+
+
+_buckets: dict = {}
+_buckets_lock = threading.Lock()
+
+
+def _client_ip() -> str:
+    # Behind CloudFront/nginx the real client is the first X-Forwarded-For
+    # entry; direct connections fall back to the socket peer.
+    fwd = request.headers.get("X-Forwarded-For", "")
+    return fwd.split(",")[0].strip() if fwd else (request.remote_addr or "?")
+
+
+def _rate_limited() -> bool:
+    """Token bucket: RATE_LIMIT_PER_MIN tokens/min per client IP."""
+    if RATE_LIMIT_PER_MIN <= 0:
+        return False
+    import time
+    now = time.monotonic()
+    ip = _client_ip()
+    with _buckets_lock:
+        tokens, last = _buckets.get(ip, (float(RATE_LIMIT_PER_MIN), now))
+        tokens = min(float(RATE_LIMIT_PER_MIN),
+                     tokens + (now - last) * RATE_LIMIT_PER_MIN / 60.0)
+        if tokens < 1.0:
+            _buckets[ip] = (tokens, now)
+            return True
+        _buckets[ip] = (tokens - 1.0, now)
+        # Keep the table from growing unboundedly under IP churn.
+        if len(_buckets) > 10000:
+            _buckets.clear()
+    return False
 
 
 def _parse_board(data) -> chess.Board:
@@ -132,6 +173,8 @@ def eval_position():
 
 @app.route("/api/bot-move", methods=["POST"])
 def bot_move():
+    if _rate_limited():
+        return jsonify({"error": "rate limited; slow down"}), 429
     data = request.get_json(silent=True)
     try:
         board = _parse_board(data)
