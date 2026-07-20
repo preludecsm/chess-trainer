@@ -221,9 +221,6 @@
         <button id="copyPgn" class="secondary">Copy PGN</button>
         <button id="analyzeLichess" class="secondary">Analyze on Lichess ↗</button>
       </div>
-      <div class="row" style="margin-bottom:0;">
-        <button id="replayFromHere" class="secondary" title="Restart from this exact position, with the side to move here as you">↺ Replay from here</button>
-      </div>
       <div id="helpPanel" style="display:none;">
         <label style="margin-top:10px;">The personalities</label>
         <p>Each opponent has a deliberate, exploitable bias — it will pursue
@@ -251,6 +248,12 @@
         after it's over — to your clipboard for pasting elsewhere. Analyze
         on Lichess opens whatever position is currently on the board in
         Lichess's own analysis tool.</p>
+        <label>Branching from the move list</label>
+        <p>Click any move to jump back and look at that position. From
+        there you're not just looking — play a move and the game
+        continues from that point instead, replacing whatever actually
+        happened next. Good for trying a different response to the same
+        early decision as many times as you want.</p>
       </div>
     </div>
 
@@ -378,12 +381,30 @@ function fenAtPly(ply) {
   // Reconstruct the position after `ply` half-moves by replaying from
   // scratch, rather than maintaining a parallel FEN array that could get
   // out of sync with `game` across moves/takebacks/new games. Games that
-  // began via "Replay from here" don't start from the standard position,
-  // so the scratch board has to start from gameStartFen too.
+  // branched from a reviewed position don't start at the standard
+  // position, so the scratch board has to start from gameStartFen too.
   const scratch = gameStartFen ? new Chess(gameStartFen) : new Chess();
   const moves = game.history({verbose: true}).slice(0, ply);
   moves.forEach(m => scratch.move({from: m.from, to: m.to, promotion: m.promotion}));
   return scratch.fen();
+}
+
+// Two small helpers so move-input handlers can reason about whatever
+// position is actually DISPLAYED (viewPly), not live `game` state, which
+// is stale while reviewing history -- that distinction is what makes
+// playing a move on a reviewed position ("branching") correct.
+function reviewedTurn() {
+  return fenAtPly(viewPly).split(' ')[1];
+}
+
+function reviewedPositionOver() {
+  // Resignation isn't a property of a specific position (it can't be,
+  // it's a manual override) -- it only means "the game ended AT the live
+  // tip." Reviewing an earlier, non-terminal position after a resignation
+  // should still allow branching; being live at the resigned position
+  // itself should not.
+  if (isLive() && gameEndedManually) return true;
+  return new Chess(fenAtPly(viewPly)).game_over();
 }
 
 function jumpToPly(ply) {
@@ -400,7 +421,8 @@ function jumpToPly(ply) {
                                              : currentPersonality() + ' is thinking…'));
     }
   } else {
-    setStatus('Reviewing move ' + viewPly + ' of ' + max + ' — use ⏭ to return to the live position.', 'reviewing');
+    setStatus('Reviewing move ' + viewPly + ' of ' + max +
+      ' — play a move to branch from here, or ⏭ for the live position.', 'reviewing');
   }
   renderMoveList();
 }
@@ -418,7 +440,6 @@ function setStatus(text, cls) {
   document.getElementById('navForward').disabled = awaitingBot || viewPly === game.history().length;
   document.getElementById('navLive').disabled = awaitingBot || live;
   document.getElementById('resign').disabled = awaitingBot || isGameOver() || !live;
-  document.getElementById('replayFromHere').disabled = awaitingBot;
 }
 
 async function fetchEval(fen) {
@@ -555,18 +576,22 @@ function highlightSelection(square) {
   clearHighlights();
   selectedSquare = square;
   $('#board [data-square="' + square + '"]').addClass('selected-square');
-  const legal = game.moves({square: square, verbose: true});
+  // Legal moves for the DISPLAYED position, not live `game` state (which
+  // differs while reviewing history).
+  const scratch = new Chess(fenAtPly(viewPly));
+  const legal = scratch.moves({square: square, verbose: true});
   legal.forEach(m => $('#board [data-square="' + m.to + '"]').addClass('legal-dest'));
 }
 
 function isOwnPiece(square) {
-  const piece = game.get(square);
+  const scratch = new Chess(fenAtPly(viewPly));
+  const piece = scratch.get(square);
   return piece && piece.color === humanColor;
 }
 
 function onDragStart(source, piece) {
-  if (isGameOver() || awaitingBot || !isLive()) return false;
-  if (game.turn() !== humanColor) return false;
+  if (awaitingBot || reviewedPositionOver()) return false;
+  if (reviewedTurn() !== humanColor) return false;
   if ((humanColor === 'w' && piece.search(/^b/) !== -1) ||
       (humanColor === 'b' && piece.search(/^w/) !== -1)) return false;
 }
@@ -575,6 +600,21 @@ function onDragStart(source, piece) {
 // separately in afterMove() so callers (onDrop) can return their string
 // result to chessboard.js immediately, as it requires.
 function tryMove(source, target) {
+  if (!isLive()) {
+    // Playing a move on a reviewed (non-live) position branches: whatever
+    // actually followed it is discarded, and the game continues from here
+    // instead. Validate on a scratch board FIRST -- an illegal attempt
+    // (e.g. a misclick while just looking at history) must not silently
+    // discard the future line just because it touched game.load().
+    const fen = fenAtPly(viewPly);
+    if (new Chess(fen).move({from: source, to: target, promotion: 'q'}) === null) {
+      return null;
+    }
+    game.load(fen);
+    gameStartFen = fen;
+    viewPly = 0;
+    gameEndedManually = null; // belonged to the now-discarded continuation
+  }
   return game.move({from: source, to: target, promotion: 'q'});
 }
 
@@ -607,7 +647,7 @@ async function afterMove() {
 }
 
 function handleSquareTap(square) {
-  if (isGameOver() || awaitingBot || !isLive() || game.turn() !== humanColor) return;
+  if (awaitingBot || reviewedPositionOver() || reviewedTurn() !== humanColor) return;
 
   if (selectedSquare && selectedSquare !== square) {
     const from = selectedSquare;
@@ -739,36 +779,11 @@ function analyzeOnLichess() {
               '_blank', 'noopener');
 }
 
-function replayFromHere() {
-  // Drill one specific decision point repeatedly: reload the currently
-  // displayed position as a fresh game, rather than replaying the moves
-  // that led to it. The human is whoever is to move there -- that's the
-  // decision being drilled.
-  if (awaitingBot) return; // an in-flight bot move must not land on the new position
-  const fen = fenAtPly(viewPly);
-  if (!game.load(fen)) return;
-  gameStartFen = fen;
-  viewPly = 0;
-  gameEndedManually = null;
-  preMoveEval = null;
-  humanColor = game.turn();
-  document.getElementById('color').value = humanColor === 'w' ? 'white' : 'black';
-  document.getElementById('feedback').textContent = '';
-  clearHighlights();
-  board.orientation(humanColor === 'w' ? 'white' : 'black');
-  board.position(fen);
-  renderMoveList();
-  setStatus((humanColor === 'w' ? 'White' : 'Black') + ' to move');
-  refreshEvalForCurrentPosition().then(data => { preMoveEval = data; });
-  maybeBotMove();
-}
-
 document.getElementById('newGame').addEventListener('click', startNewGame);
 document.getElementById('takeback').addEventListener('click', takeback);
 document.getElementById('resign').addEventListener('click', resign);
 document.getElementById('copyPgn').addEventListener('click', copyPgn);
 document.getElementById('analyzeLichess').addEventListener('click', analyzeOnLichess);
-document.getElementById('replayFromHere').addEventListener('click', replayFromHere);
 document.getElementById('showHints').addEventListener('change', () => renderTopMoves(lastTopLines));
 document.getElementById('helpBtn').addEventListener('click', () => {
   const p = document.getElementById('helpPanel');
