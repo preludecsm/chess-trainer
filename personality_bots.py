@@ -143,6 +143,10 @@ class FourPlyBot:
 
     def __init__(self, depth: int = 4):
         self.depth = depth
+        # Which side the bot is playing this move; set at the root by
+        # select() so asymmetric personality biases (SYMMETRIC_STYLE =
+        # False) know whose style to score at every node of the search.
+        self._bot_color = chess.WHITE
 
     def _phase(self, board: chess.Board) -> float:
         """1.0 = full middlegame, 0.0 = bare endgame. Tapers the king table."""
@@ -335,6 +339,7 @@ class FourPlyBot:
         true scores, and those bogus values would tie with the best and
         get picked at random. (This bug made the bot play nonsense.)
         """
+        self._bot_color = board.turn
         scored = []
         for move in self._ordered_moves(board):
             board.push(move)
@@ -352,9 +357,19 @@ class SearchingPersonality(FourPlyBot):
     Alpha-beta search whose evaluation carries a personality bias.
 
     Subclasses override style_for(board, color) to score how well a
-    position fits the personality for one side. The bias is applied
-    symmetrically (the bot assumes its opponent shares its tastes),
-    which keeps the negamax bookkeeping honest.
+    position fits the personality for one side.
+
+    SYMMETRIC_STYLE controls how the bias enters the evaluation:
+      True  (default) — both sides are scored (the bot assumes its
+        opponent shares its tastes). Right when the opponent expressing
+        the same style is genuinely bad for the bot — e.g. Fianchetto
+        credits YOUR fianchetto too, which is why it resists trading its
+        nested bishop (the documented counter-play).
+      False — only the bot's own style counts. Needed when the
+        opponent's style-carrying material is CAPTURABLE: symmetric
+        PawnStorm rated trading off White's advanced e-pawn as a style
+        win, which made 1...d5 (Scandinavian!) its top reply to 1.e4 —
+        the anti-storm move, from the storm personality.
 
     RANDOM_MARGIN: if > 0, the bot picks randomly among all root moves
     scoring within that margin of the best, instead of always playing
@@ -362,13 +377,19 @@ class SearchingPersonality(FourPlyBot):
     """
 
     RANDOM_MARGIN = 0.0
+    SYMMETRIC_STYLE = True
 
     def style_for(self, board: chess.Board, color: chess.Color) -> float:
         return 0.0
 
     def evaluate(self, board: chess.Board) -> float:
         base = super().evaluate(board)     # side-to-move perspective
-        style = self.style_for(board, chess.WHITE) - self.style_for(board, chess.BLACK)
+        if self.SYMMETRIC_STYLE:
+            style = (self.style_for(board, chess.WHITE)
+                     - self.style_for(board, chess.BLACK))
+        else:
+            own = self.style_for(board, self._bot_color)
+            style = own if self._bot_color == chess.WHITE else -own
         if board.turn == chess.BLACK:
             style = -style
         return base + style
@@ -376,6 +397,7 @@ class SearchingPersonality(FourPlyBot):
     def select(self, board: chess.Board) -> chess.Move:
         if self.RANDOM_MARGIN <= 0:
             return super().select(board)
+        self._bot_color = board.turn
         # Full-window score for every root move, then random within margin.
         scored = []
         for move in self._ordered_moves(board):
@@ -435,9 +457,12 @@ class WanderingQueenSearchBot(SearchingPersonality):
 
 
 class PawnStormSearchBot(SearchingPersonality):
-    """Values pawns advanced toward the enemy king."""
+    """Values its own pawns advanced toward the enemy king."""
 
     RANDOM_MARGIN = 0.25
+    # Own storm only: symmetric scoring made trading off the OPPONENT's
+    # advanced pawns count as style, which produced 1...d5 Scandinavians.
+    SYMMETRIC_STYLE = False
 
     def style_for(self, board: chess.Board, color: chess.Color) -> float:
         enemy_color = not color

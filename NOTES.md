@@ -185,6 +185,22 @@ actually supposed to fire — a square that hasn't been committed to yet
 (home-square king) can point the incentive the wrong way entirely,
 not just weakly.
 
+**Symmetric bias turns capturable opponent material into style targets
+(2026-07-20).** Even after the king-target fix, PawnStorm kept playing
+occasional 1...d5 Scandinavians — root-score dump showed d5 was its TOP
+reply to 1.e4. Cause: the personality bias was applied symmetrically
+(style_for(White) − style_for(Black)), so trading off White's advanced
+e4 pawn scored as a style *gain* — the storm personality was picking the
+anti-storm move. Fix: `SYMMETRIC_STYLE = False` on PawnStorm (new flag
+on SearchingPersonality) so only its own pawns count. Symmetry stays the
+default because it's *correct* where the opponent's style-material can't
+be profitably captured — Fianchetto crediting YOUR fianchetto is what
+makes it cling to its nested bishop when you try to trade it, which is
+the documented counter-play. Diagnostic that found it: score every root
+move with a full window and print the within-RANDOM_MARGIN candidate
+set — sampling select() a handful of times can miss a bad move that's
+sitting at the top of the list.
+
 **Sanity check when tuning:** play the personality against Beginner for
 20 moves and check material. **Within ±2 pawns of even = biased, not
 broken.** It should pay a small price for its obsession, not collapse.
