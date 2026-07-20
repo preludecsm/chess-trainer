@@ -107,6 +107,16 @@ the bishop arrives). Now it commits in 5 of 6 games and will sometimes
 open 1...b6. If a personality isn't expressing itself, ask whether the
 reward is beyond its search horizon before assuming the weight is too low.
 
+The same horizon problem resurfaced when depth 4 became practical
+(iterative deepening + TT, below): the deeper search sees more of
+central play's real value, which shrank Fianchetto's g6/b6-vs-d5 margin
+from a safe 0.55 pawns to 0.15 — inside the random margin. Doubling the
+preparatory/nest bonuses restored a 0.50 gap at depth 4 without
+disturbing depth 3. Full numbers and the pruning-sensitivity surprise
+(the fix needed 2×, not the ~1.4× the arithmetic suggested) are in
+NOTES.md. **Lesson: a personality tuned at one depth isn't verified at
+another — check root scores again before trusting a new depth cap.**
+
 **Bad proxies.** WanderingQueen originally rewarded raw distance from
 d1/d8, which meant a queen on a8 scored well while doing nothing. Adding
 a centralization term made the bias unmistakable — it now plays 2...Qd6

@@ -304,9 +304,43 @@ timeouts.
 
 - ~~Iterative deepening + TT~~ — done 2026-07-20 (see the TT entry
   above). Depth 4 is now ~13s/move locally. Still unbuilt from that
-  project: **killer moves**, **aspiration windows**, and a
-  **time-budgeted search** ("think for 5s") — the last one is what
-  would give consistent move times on any hardware, including hosted.
+  project: **killer moves**, **aspiration windows**.
+- ~~Time-budgeted search~~ — done 2026-07-20, same day. `think_time`
+  seconds on any bot: iterative deepening runs on a **board copy** and
+  aborts mid-iteration past the deadline (an `_OutOfTime` exception,
+  checked every 256 nodes to keep `time.monotonic()` off the hot path),
+  falling back to the last *fully completed* iteration — never a mix of
+  depths at the root, which would resurrect the root-window bug in a
+  different form. `bot.last_depth` reports what was actually reached.
+  Depth 1 always completes first (milliseconds) so there's always a
+  fallback before the clock starts. This is what let the hosted depth
+  cap rise from 3 to 4: `MAX_DEPTH=4` + a mandatory `DEFAULT_THINK_TIME`
+  bounds worst-case move time regardless of position or host CPU speed —
+  t4g's slower core just settles for a completed depth 3 instead of
+  risking an incomplete depth 4, which is exactly the point.
+
+**Fianchetto needed re-tuning for depth 4 (2026-07-20, same session).**
+Verifying the above at depth 4 for the first time (previously
+impractical) surfaced a real regression: root-score dump showed the
+g6/b6-vs-d5 gap shrinking from 0.55 pawns at depth 3 to 0.15 at depth 4
+— *inside* RANDOM_MARGIN (0.25) — because the base evaluation sees more
+of central play's real value one ply deeper, eroding the fixed style
+bonus's relative weight. The horizon-problem lesson again, at a depth
+the project had never run before. Non-obvious part: the fix didn't scale
+linearly — a proportional 1.4x bump only widened the depth-4 gap to
+0.20 (barely moved) while over-fixing depth 3 (gap to 0.95); 2.0x was
+needed to get depth 4 to a safe 0.50 gap. Read as alpha-beta pruning
+sensitivity: changing the evaluation constant changes which branches get
+pruned, so the relationship between a static bonus and a searched score
+isn't linear once real pruning is happening (i.e. depth 3 largely
+free-searches this position, depth 4 doesn't). **Preparatory-move bonus
+0.70/0.30 → 1.40/0.60, nest bonus 1.00/0.50 → 2.00/1.00.** Verified 10/10
+g6/b6 at both depth 3 and depth 4, material dead even vs Beginner after
+20 plies at both depths. Lesson: **when validating a new depth for the
+first time, don't assume a personality's existing weight still holds —
+dump root scores at that specific depth before trusting samples**, and
+when a fix doesn't move the number as much as the math suggests, suspect
+pruning interaction rather than re-deriving the math harder.
 - **More eval knowledge** — rook on open files, outposts, passed-pawn
   blockades.
 - **New personalities** — Simplifier (trades when ahead), Hypermodern.

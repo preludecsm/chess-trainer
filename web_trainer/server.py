@@ -46,6 +46,25 @@ MAX_DEPTH = max(MIN_DEPTH, min(8, int(os.environ.get("MAX_DEPTH", "8"))))
 # 0 disables (the local default); public deployments set e.g. 10.
 RATE_LIMIT_PER_MIN = int(os.environ.get("RATE_LIMIT_PER_MIN", "0"))
 
+# Think-time budget (seconds) for iterative deepening. When
+# DEFAULT_THINK_TIME > 0 (public deployments), every move is budgeted and
+# clients cannot disable it — only pick a value in [1, MAX_THINK_TIME].
+# With 0 (local default) budgets are opt-in per request via "thinkTime".
+DEFAULT_THINK_TIME = float(os.environ.get("DEFAULT_THINK_TIME", "0"))
+MAX_THINK_TIME = float(os.environ.get("MAX_THINK_TIME", "60"))
+
+
+def effective_think_time(requested) -> float:
+    """Resolve a client's requested budget against deployment policy."""
+    try:
+        t = float(requested) if requested is not None else DEFAULT_THINK_TIME
+    except (TypeError, ValueError):
+        raise ValueError("thinkTime must be a number")
+    if DEFAULT_THINK_TIME > 0:
+        t = t if t > 0 else DEFAULT_THINK_TIME
+        return max(1.0, min(MAX_THINK_TIME, t))
+    return max(0.0, min(MAX_THINK_TIME, t))
+
 app = Flask(__name__, static_folder="static", static_url_path="")
 # Vendored libs/piece images are immutable; without this Flask sends
 # Cache-Control: no-cache and the browser revalidates all 12 piece images
@@ -149,6 +168,8 @@ def index():
 def config():
     """Deployment limits, so the UI can reflect them instead of silently clamping."""
     return jsonify({"maxDepth": MAX_DEPTH,
+                    "defaultThinkTime": DEFAULT_THINK_TIME,
+                    "maxThinkTime": MAX_THINK_TIME,
                     "personalities": sorted(PERSONALITIES)})
 
 
@@ -192,6 +213,7 @@ def bot_move():
     try:
         board = _parse_board(data)
         depth = int(data.get("depth", 3))
+        think_time = effective_think_time(data.get("thinkTime"))
     except (ValueError, TypeError) as exc:
         return jsonify({"error": f"bad request: {exc}"}), 400
     depth = max(MIN_DEPTH, min(MAX_DEPTH, depth))
@@ -202,10 +224,11 @@ def bot_move():
     if personality not in PERSONALITIES:
         return jsonify({"error": f"Unknown personality: {personality}"}), 400
 
-    bot = PERSONALITIES[personality](depth=depth)
+    bot = PERSONALITIES[personality](depth=depth,
+                                     think_time=think_time or None)
     move = bot.select(board)
     san = board.san(move)
-    return jsonify({"uci": move.uci(), "san": san})
+    return jsonify({"uci": move.uci(), "san": san, "depth": bot.last_depth})
 
 
 if __name__ == "__main__":

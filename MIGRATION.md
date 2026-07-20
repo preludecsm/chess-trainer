@@ -33,7 +33,8 @@ Cheap wins worth evaluating before scaling hardware:
 | Option | Expected effect | Effort |
 |---|---|---|
 | **PyPy** instead of CPython | **MEASURED 2026-07-19 (`bench_engine.py`): 3× mean, 4–5× once the JIT warms** (10.5s → 3.5s mean per depth-3 move; steady-state ~2.2s; identical moves chosen). Full stack verified under PyPy 3.11 — flask, python-chess, Stockfish UCI, hardening. `run.sh` now prefers the `venv-pypy` venv. **Decision: build the deploy image on PyPy.** | Done locally |
-| Iterative deepening + TT | **Done 2026-07-20**: depth 3 unchanged, depth 4 1.6× faster (~13s/move locally). Hosted depth cap stays 3 (t4g depth 4 would still be ~40s+). Time-budgeted search remains the follow-up that would fix hosted move-time consistency | Done |
+| Iterative deepening + TT | **Done 2026-07-20**: depth 3 unchanged, depth 4 1.6× faster (~13s/move locally). | Done |
+| Time-budgeted search | **Done 2026-07-20**: `think_time` param, safe mid-iteration abort, `last_depth` reports what was reached. Hosted now runs `MAX_DEPTH=4` with a mandatory `DEFAULT_THINK_TIME=8` (clients may request up to `MAX_THINK_TIME=15`) — move time is now bounded regardless of position complexity or host CPU speed. Verified live: t4g settles for a completed depth 3 within budget rather than risking an incomplete depth 4. | Done |
 | Time-budgeted search | A hard per-move CPU ceiling regardless of position — the right *public* interface even if depth stays the internal dial | Small, pairs with iterative deepening |
 
 ## Architecture options
@@ -120,7 +121,7 @@ Option A is live:
 | Elastic IP | 44.227.208.213 (`eipalloc-04e1966634d26100d`) |
 | Security group | `sg-080c28ba615f5e647` — port 22 from home IP only, port 80 from CloudFront origin-facing prefix list only |
 | ECR image | `175691005574.dkr.ecr.us-west-2.amazonaws.com/chess-trainer:latest` |
-| Container env | `MAX_DEPTH=3 RATE_LIMIT_PER_MIN=10 WEB_CONCURRENCY=2` |
+| Container env | `MAX_DEPTH=4 DEFAULT_THINK_TIME=8 MAX_THINK_TIME=15 RATE_LIMIT_PER_MIN=10 WEB_CONCURRENCY=2` |
 | SSH | `ssh -i ~/.ssh/chess-trainer-key.pem ec2-user@44.227.208.213` |
 
 **To redeploy after a code change** (from the repo root):
@@ -136,7 +137,8 @@ ssh -i ~/.ssh/chess-trainer-key.pem ec2-user@44.227.208.213 \
    && docker pull 175691005574.dkr.ecr.us-west-2.amazonaws.com/chess-trainer:latest \
    && docker rm -f trainer \
    && docker run -d --name trainer --restart always -p 80:5001 \
-        -e MAX_DEPTH=3 -e RATE_LIMIT_PER_MIN=10 -e WEB_CONCURRENCY=2 \
+        -e MAX_DEPTH=4 -e DEFAULT_THINK_TIME=8 -e MAX_THINK_TIME=15 \
+        -e RATE_LIMIT_PER_MIN=10 -e WEB_CONCURRENCY=2 \
         175691005574.dkr.ecr.us-west-2.amazonaws.com/chess-trainer:latest"
 ```
 

@@ -202,6 +202,10 @@
           <label id="depthLabel">Depth</label>
           <input type="number" id="depth" value="3" min="1" max="8" style="width:50px;">
         </div>
+        <div>
+          <label id="thinkLabel" title="0 = no limit">Max think (s)</label>
+          <input type="number" id="thinkTime" value="0" min="0" max="60" style="width:55px;">
+        </div>
         <button id="helpBtn" class="secondary" title="What do these mean?" style="align-self:flex-end; border-radius:50%; width:28px; height:28px; padding:0;">?</button>
       </div>
       <div class="row">
@@ -236,6 +240,12 @@
         Higher is stronger but slower to move: depth 2 is instant but weak,
         depth 3 is the sweet spot (a few seconds per move), and each step
         above that multiplies the wait.</p>
+        <label>Max think</label>
+        <p>A time budget in seconds. The bot searches progressively deeper
+        until time runs out, then plays the best move from the deepest fully
+        finished look-ahead — so depth becomes a cap, not a promise. 0 means
+        no limit (where allowed). Handy with depth 4: quiet positions get
+        the full depth, complicated ones answer on time anyway.</p>
       </div>
     </div>
 
@@ -289,6 +299,14 @@ fetch('/api/config').then(r => r.json()).then(cfg => {
   depthInput.max = cfg.maxDepth;
   if (parseInt(depthInput.value, 10) > cfg.maxDepth) depthInput.value = cfg.maxDepth;
   document.getElementById('depthLabel').textContent = 'Depth (max ' + cfg.maxDepth + ')';
+  const thinkInput = document.getElementById('thinkTime');
+  thinkInput.max = cfg.maxThinkTime;
+  if (cfg.defaultThinkTime > 0) {
+    // Budgets are mandatory on this deployment; 0 isn't an option.
+    thinkInput.value = cfg.defaultThinkTime;
+    thinkInput.min = 1;
+    document.getElementById('thinkLabel').title = 'always budgeted on this server';
+  }
 }).catch(() => {});
 
 function cpToLabel(scoreObj, forWhiteToShow) {
@@ -392,10 +410,13 @@ async function fetchEval(fen) {
 }
 
 async function fetchBotMove(fen, personality, depth) {
+  const body = {fen: fen, personality: personality, depth: depth};
+  const think = parseFloat(document.getElementById('thinkTime').value);
+  if (think > 0) body.thinkTime = think;
   const res = await fetch('/api/bot-move', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({fen: fen, personality: personality, depth: depth})
+    body: JSON.stringify(body)
   });
   return res.json();
 }

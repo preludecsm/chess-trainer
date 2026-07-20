@@ -60,6 +60,25 @@ curl -s -X POST http://localhost:5001/api/bot-move -H "Content-Type: application
 
 A grep proves the file changed; only a move proves the running process changed. Sample repeatedly — `RANDOM_MARGIN` means single moves vary.
 
+**A personality verified at one depth is not verified at another.** Root
+scores, not sampled moves, are the real check — a bad move can sit at
+the top of the candidate set and just not get sampled in a handful of
+tries (this is exactly how the depth-4 Fianchetto regression and the
+original PawnStorm symmetric-bias bug both surfaced):
+
+```python
+bot = FianchettoSearchBot(depth=4)
+scores = bot._root_scores(board)          # {move: score}, full window, every root move
+best = max(scores.values())
+for m, s in sorted(scores.items(), key=lambda kv: -kv[1]):
+    print(board.san(m), s, "IN MARGIN" if s >= best - bot.RANDOM_MARGIN else "")
+```
+
+Any move tagged IN MARGIN can get picked by `RANDOM_MARGIN`; if that set
+includes the personality's anti-move (d5 for PawnStorm, a non-g6/b6 for
+Fianchetto), the weight needs work — regardless of how the sampled
+`select()` calls happened to land.
+
 ## Security / deployment notes
 
 - `lichess-bot/config.yml` holds a live Lichess API token (untracked; revoke if the Lichess path stays dead).
