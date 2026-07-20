@@ -145,6 +145,13 @@ def index():
     return send_from_directory(app.static_folder, "index.html", max_age=0)
 
 
+@app.route("/api/config")
+def config():
+    """Deployment limits, so the UI can reflect them instead of silently clamping."""
+    return jsonify({"maxDepth": MAX_DEPTH,
+                    "personalities": sorted(PERSONALITIES)})
+
+
 @app.route("/api/eval", methods=["POST"])
 def eval_position():
     try:

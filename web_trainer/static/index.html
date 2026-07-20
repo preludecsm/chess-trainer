@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>MickTrainerBot — Local Trainer</title>
+<title>Personality Chess Trainer</title>
 <link rel="stylesheet" href="vendor/chessboard.min.css">
 <script src="vendor/jquery.min.js"></script>
 <script src="vendor/chess.js"></script>
@@ -168,7 +168,7 @@
 
 <div class="layout">
   <div>
-    <h1>MickTrainerBot — Local Trainer</h1>
+    <h1>Personality Chess Trainer</h1>
     <div id="board"></div>
     <div id="status" style="margin-top:10px;"></div>
     <div id="feedback"></div>
@@ -188,7 +188,7 @@
           </select>
         </div>
         <div>
-          <label>Depth</label>
+          <label id="depthLabel">Depth</label>
           <input type="number" id="depth" value="3" min="1" max="8" style="width:50px;">
         </div>
       </div>
@@ -243,6 +243,19 @@ let viewPly = 0; // which half-move we're currently displaying; game.history().l
 function pieceTheme(piece) {
   return 'vendor/img/chesspieces/wikipedia/' + piece + '.png';
 }
+
+function currentPersonality() {
+  return document.getElementById('personality').value;
+}
+
+// Reflect this deployment's limits in the UI instead of silently clamping
+// server-side (the hosted instance caps depth at 3; local allows 8).
+fetch('/api/config').then(r => r.json()).then(cfg => {
+  const depthInput = document.getElementById('depth');
+  depthInput.max = cfg.maxDepth;
+  if (parseInt(depthInput.value, 10) > cfg.maxDepth) depthInput.value = cfg.maxDepth;
+  document.getElementById('depthLabel').textContent = 'Depth (max ' + cfg.maxDepth + ')';
+}).catch(() => {});
 
 function cpToLabel(scoreObj, forWhiteToShow) {
   if (!scoreObj) return '--';
@@ -313,7 +326,7 @@ function jumpToPly(ply) {
       setStatus(describeGameOver());
     } else {
       setStatus((game.turn() === humanColor ? (humanColor === 'w' ? 'White' : 'Black') + ' to move'
-                                             : 'MickTrainerBot is thinking…'));
+                                             : currentPersonality() + ' is thinking…'));
     }
   } else {
     setStatus('Reviewing move ' + viewPly + ' of ' + max + ' — use ⏭ to return to the live position.', 'reviewing');
@@ -428,7 +441,7 @@ async function maybeBotMove() {
   if (game.turn() === humanColor) return;
 
   awaitingBot = true;
-  setStatus('MickTrainerBot is thinking…', 'thinking');
+  setStatus(currentPersonality() + ' is thinking…', 'thinking');
   const personality = document.getElementById('personality').value;
   const depth = parseInt(document.getElementById('depth').value, 10);
 
