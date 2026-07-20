@@ -47,6 +47,12 @@ MAX_DEPTH = max(MIN_DEPTH, min(8, int(os.environ.get("MAX_DEPTH", "8"))))
 RATE_LIMIT_PER_MIN = int(os.environ.get("RATE_LIMIT_PER_MIN", "0"))
 
 app = Flask(__name__, static_folder="static", static_url_path="")
+# Vendored libs/piece images are immutable; without this Flask sends
+# Cache-Control: no-cache and the browser revalidates all 12 piece images
+# on every board redraw — chessboard.js redraws on every click, which
+# showed up as visible flicker. index.html is served with max_age=0 below
+# so UI iteration stays instant.
+app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 30 * 24 * 3600
 
 # One shared Stockfish process. python-chess's SimpleEngine serializes
 # access internally, but the process itself can die if fed a position it
@@ -136,7 +142,7 @@ def score_to_json(pov_score: chess.engine.PovScore) -> dict:
 
 @app.route("/")
 def index():
-    return send_from_directory(app.static_folder, "index.html")
+    return send_from_directory(app.static_folder, "index.html", max_age=0)
 
 
 @app.route("/api/eval", methods=["POST"])
