@@ -4,3 +4,4 @@ lichess-bot/
 __pycache__/
 sample_fianchetto.pgn
 web_trainer/venv/
+web_trainer/venv-pypy/

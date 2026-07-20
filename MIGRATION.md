@@ -32,7 +32,7 @@ Cheap wins worth evaluating before scaling hardware:
 
 | Option | Expected effect | Effort |
 |---|---|---|
-| **PyPy** instead of CPython | Often 5–20× on pure-Python chess code — could turn 15s into ~2s | Low: test compatibility of `chess` + flask under PyPy |
+| **PyPy** instead of CPython | **MEASURED 2026-07-19 (`bench_engine.py`): 3× mean, 4–5× once the JIT warms** (10.5s → 3.5s mean per depth-3 move; steady-state ~2.2s; identical moves chosen). Full stack verified under PyPy 3.11 — flask, python-chess, Stockfish UCI, hardening. `run.sh` now prefers the `venv-pypy` venv. **Decision: build the deploy image on PyPy.** | Done locally |
 | Iterative deepening + TT | The known correct next perf project (NOTES.md) — makes deeper search practical, allows time-budgeted moves ("think for 5s" instead of "depth 3") | Medium |
 | Time-budgeted search | A hard per-move CPU ceiling regardless of position — the right *public* interface even if depth stays the internal dial | Small, pairs with iterative deepening |
 
@@ -110,10 +110,11 @@ Everything else already works — the UI is stateless against the same API.
 
 ## Suggested sequence
 
-1. Benchmark PyPy locally (one afternoon; if it delivers even 5×, every
-   cost number above improves 5× and depth 4 becomes publicly viable).
-2. Dockerfile: python-slim (or pypy-slim) + stockfish + gunicorn; prove
-   it runs locally in-container.
+1. ~~Benchmark PyPy locally~~ **Done (2026-07-19)**: 3–5×, full stack
+   verified. Depth-3 moves drop to ~2–4s; a 2-vCPU instance now serves
+   ~15–30 moves/min instead of ~6, and depth 4 becomes publicly plausible.
+2. Dockerfile: pypy-slim + stockfish + gunicorn; prove it runs locally
+   in-container. (Requires Docker Desktop — not yet installed.)
 3. Deploy Option A behind CloudFront with rate limits + depth cap;
    invite-only link; watch CloudWatch for a couple of weeks.
 4. Decide B vs C from observed traffic shape (spiky → Lambda, steady →
