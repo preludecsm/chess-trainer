@@ -3,3 +3,4 @@ lichess-bot/
 .DS_Store
 __pycache__/
 sample_fianchetto.pgn
+web_trainer/venv/

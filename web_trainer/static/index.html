@@ -1,0 +1,634 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>MickTrainerBot — Local Trainer</title>
+<link rel="stylesheet" href="vendor/chessboard.min.css">
+<script src="vendor/jquery.min.js"></script>
+<script src="vendor/chess.js"></script>
+<script src="vendor/chessboard.min.js"></script>
+<style>
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: #1e1e1e;
+    color: #ddd;
+    margin: 0;
+    padding: 24px;
+  }
+  .layout {
+    display: flex;
+    gap: 32px;
+    max-width: 900px;
+    margin: 0 auto;
+    align-items: flex-start;
+  }
+  #board {
+    width: 480px;
+  }
+  .sidebar {
+    flex: 1;
+    min-width: 280px;
+  }
+  h1 {
+    font-size: 18px;
+    font-weight: 600;
+    margin: 0 0 16px;
+    color: #fff;
+  }
+  .panel {
+    background: #2a2a2a;
+    border-radius: 8px;
+    padding: 14px 16px;
+    margin-bottom: 14px;
+  }
+  .panel label {
+    display: block;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: #999;
+    margin-bottom: 4px;
+  }
+  select, button, input[type=number] {
+    font-size: 14px;
+    padding: 6px 8px;
+    border-radius: 6px;
+    border: 1px solid #444;
+    background: #1e1e1e;
+    color: #eee;
+  }
+  .row {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    margin-bottom: 10px;
+  }
+  button {
+    cursor: pointer;
+    background: #3a6ea5;
+    border-color: #3a6ea5;
+    color: #fff;
+    font-weight: 600;
+  }
+  button:hover { background: #4a7eb5; }
+  button:disabled {
+    opacity: 0.4;
+    cursor: default;
+  }
+  button.secondary {
+    background: #3a3a3a;
+    border-color: #3a3a3a;
+  }
+  button.secondary:hover { background: #4a4a4a; }
+  #status {
+    font-size: 14px;
+    min-height: 20px;
+    margin-bottom: 4px;
+  }
+  #feedback {
+    font-size: 13px;
+    color: #aad;
+    min-height: 18px;
+  }
+  .eval-bar-wrap {
+    background: #111;
+    border-radius: 6px;
+    height: 22px;
+    overflow: hidden;
+    margin-bottom: 8px;
+    position: relative;
+  }
+  .eval-bar-white {
+    background: #eee;
+    height: 100%;
+    transition: width 0.3s ease;
+  }
+  .eval-label {
+    font-size: 14px;
+    font-weight: 600;
+    margin-bottom: 10px;
+  }
+  .move-line {
+    font-size: 13px;
+    padding: 4px 0;
+    border-bottom: 1px solid #333;
+    display: flex;
+    justify-content: space-between;
+  }
+  .move-line:last-child { border-bottom: none; }
+  .move-list {
+    font-size: 13px;
+    max-height: 160px;
+    overflow-y: auto;
+    line-height: 1.6;
+  }
+  .move-jump {
+    cursor: pointer;
+    padding: 1px 3px;
+    border-radius: 3px;
+  }
+  .move-jump:hover {
+    background: #3a3a3a;
+  }
+  .move-jump.current-ply {
+    background: #3a6ea5;
+    color: #fff;
+  }
+  #navFirst, #navBack, #navForward, #navLive {
+    padding: 6px 10px;
+    font-size: 15px;
+  }
+  .thinking {
+    color: #e0a030;
+  }
+  .reviewing {
+    color: #e0a030;
+  }
+  .selected-square {
+    box-shadow: inset 0 0 0 3px #3a6ea5;
+  }
+  .legal-dest {
+    position: relative;
+  }
+  .legal-dest::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 22%;
+    height: 22%;
+    background: rgba(58, 110, 165, 0.6);
+    border-radius: 50%;
+    transform: translate(-50%, -50%);
+    pointer-events: none;
+  }
+</style>
+</head>
+<body>
+
+<div class="layout">
+  <div>
+    <h1>MickTrainerBot — Local Trainer</h1>
+    <div id="board"></div>
+    <div id="status" style="margin-top:10px;"></div>
+    <div id="feedback"></div>
+  </div>
+
+  <div class="sidebar">
+    <div class="panel">
+      <div class="row">
+        <div>
+          <label>Personality</label>
+          <select id="personality">
+            <option>Beginner</option>
+            <option>SafeRandom</option>
+            <option>WanderingQueen</option>
+            <option selected>PawnStorm</option>
+            <option>Fianchetto</option>
+          </select>
+        </div>
+        <div>
+          <label>Depth</label>
+          <input type="number" id="depth" value="3" min="1" max="8" style="width:50px;">
+        </div>
+      </div>
+      <div class="row">
+        <div>
+          <label>Play as</label>
+          <select id="color">
+            <option value="white" selected>White</option>
+            <option value="black">Black</option>
+          </select>
+        </div>
+        <button id="newGame">New Game</button>
+        <button id="takeback" class="secondary">Take Back</button>
+      </div>
+    </div>
+
+    <div class="panel">
+      <label>Stockfish eval (White's perspective)</label>
+      <div class="eval-label" id="evalLabel">--</div>
+      <div class="eval-bar-wrap"><div class="eval-bar-white" id="evalBar" style="width:50%;"></div></div>
+      <label style="margin-top:10px;">Top engine moves</label>
+      <div id="topMoves">
+        <div class="move-line"><span>--</span><span>--</span></div>
+        <div class="move-line"><span>--</span><span>--</span></div>
+      </div>
+      <label style="margin-top:10px; text-transform:none; letter-spacing:0; display:flex; align-items:center; gap:6px; cursor:pointer;">
+        <input type="checkbox" id="showHints"> Show hints before I move
+      </label>
+    </div>
+
+    <div class="panel">
+      <label>Moves</label>
+      <div class="move-list" id="moveList">—</div>
+      <div class="row" style="margin-top:10px; margin-bottom:0;">
+        <button id="navFirst" class="secondary" title="First move">⏮</button>
+        <button id="navBack" class="secondary" title="Previous move">◀</button>
+        <button id="navForward" class="secondary" title="Next move">▶</button>
+        <button id="navLive" class="secondary" title="Return to current position">⏭</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const game = new Chess();
+let board = null;
+let humanColor = 'w';
+let preMoveEval = null; // eval snapshot for the position before the human's move
+let awaitingBot = false;
+let viewPly = 0; // which half-move we're currently displaying; game.history().length == live
+
+function pieceTheme(piece) {
+  return 'vendor/img/chesspieces/wikipedia/' + piece + '.png';
+}
+
+function cpToLabel(scoreObj, forWhiteToShow) {
+  if (!scoreObj) return '--';
+  if (scoreObj.mate !== undefined) {
+    return 'Mate in ' + Math.abs(scoreObj.mate);
+  }
+  const pawns = (scoreObj.cp / 100).toFixed(2);
+  return (scoreObj.cp > 0 ? '+' : '') + pawns;
+}
+
+function scoreToNumeric(scoreObj) {
+  // Rough numeric value (centipawns, White POV) for comparisons; mate scores
+  // get mapped to a large magnitude so they still sort/compare sensibly.
+  if (!scoreObj) return 0;
+  if (scoreObj.mate !== undefined) {
+    return scoreObj.mate > 0 ? (100000 - scoreObj.mate * 100) : -(100000 + scoreObj.mate * 100);
+  }
+  return scoreObj.cp;
+}
+
+function updateEvalBar(scoreObj) {
+  const cp = scoreToNumeric(scoreObj);
+  // Map centipawns to a 0-100% bar, saturating around +-8 pawns.
+  const clamped = Math.max(-800, Math.min(800, cp));
+  const pct = 50 + (clamped / 800) * 50;
+  document.getElementById('evalBar').style.width = pct + '%';
+  document.getElementById('evalLabel').textContent = cpToLabel(scoreObj);
+}
+
+function renderMoveList() {
+  const history = game.history();
+  let out = '';
+  for (let i = 0; i < history.length; i += 2) {
+    const moveNum = i / 2 + 1;
+    out += moveNum + '. ';
+    out += '<span class="move-jump" data-ply="' + (i + 1) + '">' + history[i] + '</span> ';
+    if (history[i + 1]) {
+      out += '<span class="move-jump" data-ply="' + (i + 2) + '">' + history[i + 1] + '</span>';
+    }
+    out += '<br>';
+  }
+  document.getElementById('moveList').innerHTML = out || '—';
+  $('#moveList [data-ply="' + viewPly + '"]').addClass('current-ply');
+}
+
+function isLive() {
+  return viewPly === game.history().length;
+}
+
+function fenAtPly(ply) {
+  // Reconstruct the position after `ply` half-moves by replaying from
+  // scratch, rather than maintaining a parallel FEN array that could get
+  // out of sync with `game` across moves/takebacks/new games.
+  const scratch = new Chess();
+  const moves = game.history({verbose: true}).slice(0, ply);
+  moves.forEach(m => scratch.move({from: m.from, to: m.to, promotion: m.promotion}));
+  return scratch.fen();
+}
+
+function jumpToPly(ply) {
+  const max = game.history().length;
+  viewPly = Math.max(0, Math.min(ply, max));
+  board.position(fenAtPly(viewPly), false);
+  clearHighlights();
+
+  if (isLive()) {
+    if (game.game_over()) {
+      setStatus(describeGameOver());
+    } else {
+      setStatus((game.turn() === humanColor ? (humanColor === 'w' ? 'White' : 'Black') + ' to move'
+                                             : 'MickTrainerBot is thinking…'));
+    }
+  } else {
+    setStatus('Reviewing move ' + viewPly + ' of ' + max + ' — use ⏭ to return to the live position.', 'reviewing');
+  }
+  renderMoveList();
+}
+
+function setStatus(text, cls) {
+  const el = document.getElementById('status');
+  el.textContent = text;
+  el.className = cls || '';
+  const live = isLive();
+  document.getElementById('takeback').disabled = awaitingBot || game.history().length === 0 || !live;
+  // Nav is blocked while the bot is mid-search too, so a jump can't race
+  // against the async board.position() call once its move resolves.
+  document.getElementById('navFirst').disabled = awaitingBot || viewPly === 0;
+  document.getElementById('navBack').disabled = awaitingBot || viewPly === 0;
+  document.getElementById('navForward').disabled = awaitingBot || viewPly === game.history().length;
+  document.getElementById('navLive').disabled = awaitingBot || live;
+}
+
+async function fetchEval(fen) {
+  const res = await fetch('/api/eval', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({fen: fen})
+  });
+  return res.json();
+}
+
+async function fetchBotMove(fen, personality, depth) {
+  const res = await fetch('/api/bot-move', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({fen: fen, personality: personality, depth: depth})
+  });
+  return res.json();
+}
+
+let lastTopLines = [];
+
+function renderTopMoves(lines) {
+  // Single owner of the panel's visibility policy. The data always
+  // describes the LIVE position, so:
+  //   - bot's move pending  -> never show (Stockfish's advice for a bot
+  //     that deliberately ignores it is noise, and it used to flash here)
+  //   - your move pending   -> the answer to your decision: hidden unless
+  //     the hints toggle is on (this holds while browsing history too —
+  //     the panel data is still the pending answer)
+  //   - game over           -> show freely
+  lastTopLines = lines || [];
+  const el = document.getElementById('topMoves');
+  const gameLive = !game.game_over();
+
+  if (gameLive && game.turn() !== humanColor) {
+    el.innerHTML = '<div class="move-line"><span>--</span><span>--</span></div>';
+    return;
+  }
+  if (gameLive && !document.getElementById('showHints').checked) {
+    el.innerHTML = '<div class="move-line"><span style="color:#777;">hidden until you move</span><span></span></div>';
+    return;
+  }
+  if (lastTopLines.length === 0) {
+    el.innerHTML = '<div class="move-line"><span>--</span><span>--</span></div>';
+    return;
+  }
+  el.innerHTML = lastTopLines.map(l =>
+    '<div class="move-line"><span>' + l.san + '</span><span>' + cpToLabel(l.score) + '</span></div>'
+  ).join('');
+}
+
+function describeGameOver() {
+  if (game.in_checkmate()) return (game.turn() === 'w' ? 'Black' : 'White') + ' wins by checkmate';
+  if (game.in_stalemate()) return 'Draw by stalemate';
+  if (game.in_threefold_repetition()) return 'Draw by repetition';
+  if (game.insufficient_material()) return 'Draw by insufficient material';
+  if (game.in_draw()) return 'Draw';
+  return 'Game over';
+}
+
+async function refreshEvalForCurrentPosition() {
+  const data = await fetchEval(game.fen());
+  if (data.gameOver) {
+    updateEvalBar(null);
+    renderTopMoves([]);
+    return null;
+  }
+  updateEvalBar(data.lines[0] ? data.lines[0].score : null);
+  renderTopMoves(data.lines);
+  return data;
+}
+
+function evalSwingMessage(preData, postScoreWhitePov) {
+  if (!preData || !preData.lines || preData.lines.length === 0) return '';
+  const bestBefore = scoreToNumeric(preData.lines[0].score);
+  const actualAfter = scoreToNumeric(postScoreWhitePov);
+  // Cost is measured from the mover's perspective: for White, dropping
+  // below the pre-move best is bad; for Black it's the mirror image.
+  const cost = humanColor === 'w' ? (bestBefore - actualAfter) : (actualAfter - bestBefore);
+  const pawns = (cost / 100).toFixed(2);
+  if (cost <= 5) return '✓ That matched (or beat) the engine\'s top choice.';
+  if (cost < 50) return 'Close — cost about ' + pawns + ' pawns vs. ' + preData.lines[0].san + '.';
+  return '⚠ Cost about ' + pawns + ' pawns. Engine preferred ' + preData.lines[0].san +
+         (preData.lines[1] ? (' or ' + preData.lines[1].san) : '') + '.';
+}
+
+async function maybeBotMove() {
+  if (game.game_over()) {
+    setStatus(describeGameOver());
+    return;
+  }
+  if (game.turn() === humanColor) return;
+
+  awaitingBot = true;
+  setStatus('MickTrainerBot is thinking…', 'thinking');
+  const personality = document.getElementById('personality').value;
+  const depth = parseInt(document.getElementById('depth').value, 10);
+
+  const data = await fetchBotMove(game.fen(), personality, depth);
+  if (data.error) {
+    setStatus('Bot error: ' + data.error);
+    awaitingBot = false;
+    return;
+  }
+  game.move({from: data.uci.slice(0, 2), to: data.uci.slice(2, 4), promotion: data.uci.slice(4) || undefined});
+  viewPly = game.history().length;
+  board.position(game.fen());
+  renderMoveList();
+  awaitingBot = false;
+
+  if (game.game_over()) {
+    setStatus(describeGameOver());
+    updateEvalBar(null);
+    renderTopMoves([]);
+    return;
+  }
+  setStatus((humanColor === 'w' ? 'White' : 'Black') + ' to move');
+  preMoveEval = await refreshEvalForCurrentPosition();
+}
+
+let selectedSquare = null;
+
+function clearHighlights() {
+  $('#board .square-55d63').removeClass('selected-square legal-dest');
+  selectedSquare = null;
+}
+
+function highlightSelection(square) {
+  clearHighlights();
+  selectedSquare = square;
+  $('#board [data-square="' + square + '"]').addClass('selected-square');
+  const legal = game.moves({square: square, verbose: true});
+  legal.forEach(m => $('#board [data-square="' + m.to + '"]').addClass('legal-dest'));
+}
+
+function isOwnPiece(square) {
+  const piece = game.get(square);
+  return piece && piece.color === humanColor;
+}
+
+function onDragStart(source, piece) {
+  if (game.game_over() || awaitingBot || !isLive()) return false;
+  if (game.turn() !== humanColor) return false;
+  if ((humanColor === 'w' && piece.search(/^b/) !== -1) ||
+      (humanColor === 'b' && piece.search(/^w/) !== -1)) return false;
+}
+
+// Synchronous: attempts the move on the model only. Board/UI updates happen
+// separately in afterMove() so callers (onDrop) can return their string
+// result to chessboard.js immediately, as it requires.
+function tryMove(source, target) {
+  return game.move({from: source, to: target, promotion: 'q'});
+}
+
+async function afterMove() {
+  viewPly = game.history().length;
+  board.position(game.fen());
+  renderMoveList();
+  document.getElementById('feedback').textContent = '';
+
+  if (game.game_over()) {
+    setStatus(describeGameOver());
+    updateEvalBar(null);
+    renderTopMoves([]);
+    return;
+  }
+
+  setStatus('Evaluating…');
+  const postData = await fetchEval(game.fen());
+  if (preMoveEval) {
+    // postData is scored for the side now to move; we want White-POV score
+    // of the resulting position, which is exactly what /api/eval returns
+    // (server always scores from White's perspective).
+    const postScore = postData.lines[0] ? postData.lines[0].score : null;
+    document.getElementById('feedback').textContent = evalSwingMessage(preMoveEval, postScore);
+  }
+  updateEvalBar(postData.lines[0] ? postData.lines[0].score : null);
+  renderTopMoves(postData.lines);
+
+  await maybeBotMove();
+}
+
+function handleSquareTap(square) {
+  if (game.game_over() || awaitingBot || !isLive() || game.turn() !== humanColor) return;
+
+  if (selectedSquare && selectedSquare !== square) {
+    const from = selectedSquare;
+    clearHighlights();
+    const move = tryMove(from, square);
+    if (move === null) {
+      if (isOwnPiece(square)) highlightSelection(square);
+      return;
+    }
+    afterMove();
+    return;
+  }
+
+  if (selectedSquare === square) {
+    clearHighlights();
+    return;
+  }
+
+  if (isOwnPiece(square)) highlightSelection(square);
+}
+
+function onDrop(source, target) {
+  // chessboard.js reports a plain click (no drag distance) as source === target.
+  // That's what makes click-to-move possible without a separate listener —
+  // its own mousedown-driven drag machinery would otherwise swallow clicks
+  // on pieces before any custom click handler reliably saw them.
+  if (source === target) {
+    handleSquareTap(target);
+    return 'snapback';
+  }
+
+  clearHighlights();
+  const move = tryMove(source, target);
+  if (move === null) return 'snapback';
+  afterMove(); // fire-and-forget; onDrop must return synchronously
+}
+
+function onSnapEnd() {
+  board.position(game.fen());
+}
+
+function startNewGame() {
+  game.reset();
+  viewPly = 0;
+  humanColor = document.getElementById('color').value === 'white' ? 'w' : 'b';
+  preMoveEval = null;
+  document.getElementById('feedback').textContent = '';
+  board.orientation(humanColor === 'w' ? 'white' : 'black');
+  board.position('start');
+  renderMoveList();
+  setStatus((humanColor === 'w' ? 'White' : 'Black') + ' to move');
+  refreshEvalForCurrentPosition().then(data => { preMoveEval = data; });
+  maybeBotMove();
+}
+
+function takeback() {
+  if (awaitingBot || !isLive() || game.history().length === 0) return;
+
+  clearHighlights();
+  // Undo until it's the human's turn again, so a takeback always removes
+  // one full human+bot exchange (or just the bot's opening move, if the
+  // human plays Black and hasn't moved yet).
+  while (game.history().length > 0) {
+    game.undo();
+    if (game.turn() === humanColor) break;
+  }
+  viewPly = game.history().length;
+
+  board.position(game.fen());
+  renderMoveList();
+  document.getElementById('feedback').textContent = '';
+  setStatus((humanColor === 'w' ? 'White' : 'Black') + ' to move');
+  refreshEvalForCurrentPosition().then(data => { preMoveEval = data; });
+  maybeBotMove(); // no-op if it's already the human's turn
+}
+
+document.getElementById('newGame').addEventListener('click', startNewGame);
+document.getElementById('takeback').addEventListener('click', takeback);
+document.getElementById('showHints').addEventListener('change', () => renderTopMoves(lastTopLines));
+document.getElementById('navFirst').addEventListener('click', () => jumpToPly(0));
+document.getElementById('navBack').addEventListener('click', () => jumpToPly(viewPly - 1));
+document.getElementById('navForward').addEventListener('click', () => jumpToPly(viewPly + 1));
+document.getElementById('navLive').addEventListener('click', () => jumpToPly(game.history().length));
+$('#moveList').on('click', '.move-jump', function() {
+  jumpToPly(parseInt($(this).attr('data-ply'), 10));
+});
+
+board = Chessboard('board', {
+  draggable: true,
+  position: 'start',
+  pieceTheme: pieceTheme,
+  onDragStart: onDragStart,
+  onDrop: onDrop,
+  onSnapEnd: onSnapEnd
+});
+
+// chessboard.js's own mousedown handling only engages (and thus only calls
+// onDrop) when the clicked square currently holds a piece the human is
+// allowed to drag. Clicking an empty square, or an opponent's piece as a
+// capture target, never reaches that pipeline at all -- it does nothing
+// on its own. This delegated listener covers exactly those two gaps;
+// own-piece squares are deliberately skipped since onDrop's source===target
+// case already handles those (see onDrop / handleSquareTap above).
+$('#board').on('click', '.square-55d63', function() {
+  const square = $(this).attr('data-square');
+  if (isOwnPiece(square)) return;
+  handleSquareTap(square);
+});
+
+startNewGame();
+</script>
+
+</body>
+</html>
