@@ -34,7 +34,7 @@ Cheap wins worth evaluating before scaling hardware:
 |---|---|---|
 | **PyPy** instead of CPython | **MEASURED 2026-07-19 (`bench_engine.py`): 3× mean, 4–5× once the JIT warms** (10.5s → 3.5s mean per depth-3 move; steady-state ~2.2s; identical moves chosen). Full stack verified under PyPy 3.11 — flask, python-chess, Stockfish UCI, hardening. `run.sh` now prefers the `venv-pypy` venv. **Decision: build the deploy image on PyPy.** | Done locally |
 | Iterative deepening + TT | **Done 2026-07-20**: depth 3 unchanged, depth 4 1.6× faster (~13s/move locally). | Done |
-| Time-budgeted search | **Done 2026-07-20**: `think_time` param, safe mid-iteration abort, `last_depth` reports what was reached. Hosted now runs `MAX_DEPTH=4` with a mandatory `DEFAULT_THINK_TIME=8` (clients may request up to `MAX_THINK_TIME=15`) — move time is now bounded regardless of position complexity or host CPU speed. Verified live: t4g settles for a completed depth 3 within budget rather than risking an incomplete depth 4. | Done |
+| Time-budgeted search | **Done 2026-07-20**: `think_time` param, safe mid-iteration abort, `last_depth` reports what was reached. First deploy used `DEFAULT_THINK_TIME=8`, which turned out to let hard positions fall back all the way to depth 2 (weak) on t4g — a real inconsistency, not just a latency wobble. Re-measured and fixed same day: `DEFAULT_THINK_TIME=18` (`MAX_THINK_TIME=25`) guarantees **depth 3 as a floor** on t4g regardless of position — depth 4 only ever adds, never subtracts. Worst-case move time ~19s. See "Depth-3 floor" below for the full investigation. | Done |
 | Time-budgeted search | A hard per-move CPU ceiling regardless of position — the right *public* interface even if depth stays the internal dial | Small, pairs with iterative deepening |
 
 ## Architecture options
@@ -121,7 +121,8 @@ Option A is live:
 | Elastic IP | 44.227.208.213 (`eipalloc-04e1966634d26100d`) |
 | Security group | `sg-080c28ba615f5e647` — port 22 from home IP only, port 80 from CloudFront origin-facing prefix list only |
 | ECR image | `175691005574.dkr.ecr.us-west-2.amazonaws.com/chess-trainer:latest` |
-| Container env | `MAX_DEPTH=4 DEFAULT_THINK_TIME=8 MAX_THINK_TIME=15 RATE_LIMIT_PER_MIN=10 WEB_CONCURRENCY=2` |
+| Container env | `MAX_DEPTH=4 DEFAULT_THINK_TIME=18 MAX_THINK_TIME=25 RATE_LIMIT_PER_MIN=10 WEB_CONCURRENCY=2` |
+| CPU credits | Instance is in **Unlimited** mode (checked 2026-07-20) — under sustained load it keeps bursting at full speed rather than throttling to baseline; the cost is billed overage, not a performance cliff. Balance was healthy (~440+, stable) as of the check. |
 | SSH | `ssh -i ~/.ssh/chess-trainer-key.pem ec2-user@44.227.208.213` |
 
 **To redeploy after a code change** (from the repo root):
@@ -137,7 +138,7 @@ ssh -i ~/.ssh/chess-trainer-key.pem ec2-user@44.227.208.213 \
    && docker pull 175691005574.dkr.ecr.us-west-2.amazonaws.com/chess-trainer:latest \
    && docker rm -f trainer \
    && docker run -d --name trainer --restart always -p 80:5001 \
-        -e MAX_DEPTH=4 -e DEFAULT_THINK_TIME=8 -e MAX_THINK_TIME=15 \
+        -e MAX_DEPTH=4 -e DEFAULT_THINK_TIME=18 -e MAX_THINK_TIME=25 \
         -e RATE_LIMIT_PER_MIN=10 -e WEB_CONCURRENCY=2 \
         175691005574.dkr.ecr.us-west-2.amazonaws.com/chess-trainer:latest"
 ```
@@ -145,6 +146,63 @@ ssh -i ~/.ssh/chess-trainer-key.pem ec2-user@44.227.208.213 \
 Note: home IP changes break SSH access (rule is /32-scoped) — update with
 `aws ec2 authorize-security-group-ingress`. Measured on t4g.small: depth-3
 middlegame ~15s cold, improving as the PyPy JIT warms.
+
+### Depth-3 floor investigation (2026-07-20)
+
+The first `MAX_DEPTH=4` deploy used `DEFAULT_THINK_TIME=8`, chosen without
+measurement. Testing it properly (explicit `depth:4` requests against
+real positions, not the default-depth curl calls used to "verify" the
+initial deploy — those had silently used the server's `depth=3` fallback
+and proved nothing) showed the actual behavior was a **2–4 depth swing**,
+not a mild "sometimes 3 instead of 4": hard middlegames fell back all
+the way to depth 2, which this project's own docs call "weak but
+instant." That's a real inconsistency against NOTES.md's explicit design
+goal (depth 3 deliberately calibrated to the target player's skill
+frontier — "a stronger bot is not better").
+
+Two questions followed, both benchmarked rather than guessed:
+
+**Would a faster instance fix it?** Spot-launched `c8g.medium`
+(Graviton4, 1 vCPU — note *half* the cores of `t4g.small`'s 2, so
+matching capacity would actually need `c8g.large`) and ran the identical
+`bench_engine.py`, plus the same explicit-depth-4 hard-position test,
+directly against both instances:
+
+| | depth-3 mean | depth-4, 8s budget, hard position |
+|---|---|---|
+| Local (Apple Silicon) | 3.46s | completes fully (~13s) |
+| c8g.medium (Graviton4) | 5.38s | falls back to depth 3 |
+| t4g.small (Graviton2) | 11.45s | falls back to depth 2 |
+
+A newer instance changes *what* you fall back to (3 vs 2) but doesn't
+eliminate the fallback — even Graviton4 doesn't close the gap to Apple
+Silicon's single-core performance. Real effect, not a full fix on its
+own, and `c8g.large` (matching current 2-vCPU capacity) is a materially
+bigger cost jump than 2×.
+
+**Is the credit model a second hidden risk?** Checked instance credit
+mode directly (`describe-instance-credit-specifications`): `t4g.small`
+is in **Unlimited** mode, not Standard — under sustained load it keeps
+bursting at full speed rather than throttling to baseline, billing the
+overage instead of degrading silently. One less risk than initially
+flagged; still worth knowing this is a cost lever, not just a
+performance one, under real concurrent-user load.
+
+**Fix shipped**: raise the budget so depth 3 always completes, on the
+current instance, at zero added cost — `DEFAULT_THINK_TIME=18` (measured
+worst-case depth-3 was 13.12s; that leaves real margin), `MAX_THINK_TIME=25`.
+Depth 4 becomes pure bonus on easy positions, never a step down from the
+calibrated baseline. Verified on all three benchmark positions: opening
+reaches depth 4, both hard middlegames floor at depth 3 (worst-case
+latency ~19s, bounded and known). The UI now also displays the depth
+actually reached when it falls short of the request, so any remaining
+variance (3 vs 4) is visible rather than silent — the instance/budget
+question was never really about eliminating variance, it was about
+making sure it never becomes invisible or falls below the design floor.
+
+The instance-upgrade lever (`c8g.large`) remains available later if the
+depth-4 bonus case matters enough to be worth ~2-4x the monthly cost —
+not needed today.
 
 ## Suggested sequence
 

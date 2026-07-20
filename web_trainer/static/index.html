@@ -183,6 +183,7 @@
     <div id="board"></div>
     <div id="status" style="margin-top:10px;"></div>
     <div id="feedback"></div>
+    <div id="lastBotDepth" style="font-size:12px; color:#888; margin-top:2px;"></div>
   </div>
 
   <div class="sidebar">
@@ -506,6 +507,13 @@ async function maybeBotMove() {
     awaitingBot = false;
     return;
   }
+  // Show what the bot actually reached, not just what was requested -- a
+  // time-budgeted search can complete short of the requested depth on a
+  // hard position, and that should be visible, not silent.
+  const depthNote = document.getElementById('lastBotDepth');
+  depthNote.textContent = (data.depth && data.depth < depth)
+    ? 'Searched to depth ' + data.depth + ' of ' + depth + ' (time budget)'
+    : (data.depth ? 'Searched to depth ' + data.depth : '');
   game.move({from: data.uci.slice(0, 2), to: data.uci.slice(2, 4), promotion: data.uci.slice(4) || undefined});
   viewPly = game.history().length;
   board.position(game.fen());
@@ -561,6 +569,7 @@ async function afterMove() {
   board.position(game.fen());
   renderMoveList();
   document.getElementById('feedback').textContent = '';
+  document.getElementById('lastBotDepth').textContent = '';
 
   if (game.game_over()) {
     setStatus(describeGameOver());
@@ -633,6 +642,7 @@ function startNewGame() {
   humanColor = document.getElementById('color').value === 'white' ? 'w' : 'b';
   preMoveEval = null;
   document.getElementById('feedback').textContent = '';
+  document.getElementById('lastBotDepth').textContent = '';
   board.orientation(humanColor === 'w' ? 'white' : 'black');
   board.position('start');
   renderMoveList();
@@ -657,6 +667,7 @@ function takeback() {
   board.position(game.fen());
   renderMoveList();
   document.getElementById('feedback').textContent = '';
+  document.getElementById('lastBotDepth').textContent = '';
   setStatus((humanColor === 'w' ? 'White' : 'Black') + ' to move');
   refreshEvalForCurrentPosition().then(data => { preMoveEval = data; });
   maybeBotMove(); // no-op if it's already the human's turn
