@@ -359,15 +359,30 @@ function updateEvalBar(scoreObj) {
 
 function renderMoveList() {
   const history = game.history();
+  // A branched game's own move stack starts empty at the branch point,
+  // but the branch point itself can be anywhere in a real game -- number
+  // from gameStartFen's actual fullmove count/side-to-move, not from
+  // array position, or a branch from deep in a game wrongly displays as
+  // starting over at move 1.
+  const startParts = (gameStartFen || 'x x w x x 1').split(' ');
+  const startColor = startParts[1];
+  let moveNum = parseInt(startParts[5], 10) || 1;
+
   let out = '';
-  for (let i = 0; i < history.length; i += 2) {
-    const moveNum = i / 2 + 1;
+  let i = 0;
+  if (startColor === 'b' && history.length > 0) {
+    out += moveNum + '... <span class="move-jump" data-ply="1">' + history[0] + '</span><br>';
+    i = 1;
+    moveNum++;
+  }
+  for (; i < history.length; i += 2) {
     out += moveNum + '. ';
     out += '<span class="move-jump" data-ply="' + (i + 1) + '">' + history[i] + '</span> ';
     if (history[i + 1]) {
       out += '<span class="move-jump" data-ply="' + (i + 2) + '">' + history[i + 1] + '</span>';
     }
     out += '<br>';
+    moveNum++;
   }
   document.getElementById('moveList').innerHTML = out || '—';
   $('#moveList [data-ply="' + viewPly + '"]').addClass('current-ply');
