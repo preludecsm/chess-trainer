@@ -197,6 +197,17 @@
 
   <div class="sidebar">
     <div class="panel">
+      <label>Moves</label>
+      <div class="row">
+        <button id="navFirst" class="secondary" title="First move">⏮</button>
+        <button id="navBack" class="secondary" title="Previous move">◀</button>
+        <button id="navForward" class="secondary" title="Next move">▶</button>
+        <button id="navLive" class="secondary" title="Return to current position">⏭</button>
+      </div>
+      <div class="move-list" id="moveList">—</div>
+    </div>
+
+    <div class="panel">
       <div class="row">
         <div>
           <label>Personality</label>
@@ -280,17 +291,6 @@
       <label style="margin-top:10px; text-transform:none; letter-spacing:0; display:flex; align-items:center; gap:6px; cursor:pointer;">
         <input type="checkbox" id="showHints"> Show hints before I move
       </label>
-    </div>
-
-    <div class="panel">
-      <label>Moves</label>
-      <div class="row">
-        <button id="navFirst" class="secondary" title="First move">⏮</button>
-        <button id="navBack" class="secondary" title="Previous move">◀</button>
-        <button id="navForward" class="secondary" title="Next move">▶</button>
-        <button id="navLive" class="secondary" title="Return to current position">⏭</button>
-      </div>
-      <div class="move-list" id="moveList">—</div>
     </div>
   </div>
 </div>
@@ -449,10 +449,16 @@ function jumpToPly(ply) {
     // Branching only works where it's actually the human's move in the
     // DISPLAYED position -- say so explicitly rather than letting a
     // move attempt silently do nothing with no explanation.
+    //
+    // "after move X" names the ply reached; "Y to move" names whose turn
+    // comes NEXT from here -- keeping those two facts in separate clauses
+    // avoids reading "that's PawnStorm's move" as a claim about move X
+    // itself (move X, e.g. 1.e4, was the human's move that got us here).
     const canBranch = !reviewedPositionOver() && reviewedTurn() === humanColor;
-    setStatus('Reviewing move ' + viewPly + ' of ' + max + ' — ' +
+    const toMove = canBranch ? 'you' : currentPersonality();
+    setStatus('Reviewing after move ' + viewPly + ' of ' + max + ' — ' + toMove + ' to move; ' +
       (canBranch ? 'play a move to branch from here'
-                 : 'that’s ' + currentPersonality() + '’s move; step back further to branch as yourself') +
+                 : 'step back further to branch as yourself') +
       ', or ⏭ for the live position.', 'reviewing');
   }
   renderMoveList();
