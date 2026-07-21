@@ -35,8 +35,12 @@
     width: 480px;
   }
   .sidebar {
-    flex: 1;
-    min-width: 280px;
+    /* Fixed, not flex: 1 -- a flexible width meant its own rendered size
+       could still shift with content even after vertical position was
+       pinned (388px = the 900px layout max minus the 480px board and the
+       32px gap), which showed up as the whole column jumping sideways. */
+    width: 388px;
+    flex: none;
   }
   h1 {
     font-size: 18px;
