@@ -274,13 +274,13 @@
 
     <div class="panel">
       <label>Moves</label>
-      <div class="move-list" id="moveList">—</div>
-      <div class="row" style="margin-top:10px; margin-bottom:0;">
+      <div class="row">
         <button id="navFirst" class="secondary" title="First move">⏮</button>
         <button id="navBack" class="secondary" title="Previous move">◀</button>
         <button id="navForward" class="secondary" title="Next move">▶</button>
         <button id="navLive" class="secondary" title="Return to current position">⏭</button>
       </div>
+      <div class="move-list" id="moveList">—</div>
     </div>
   </div>
 </div>
@@ -437,6 +437,7 @@ function jumpToPly(ply) {
       ', or ⏭ for the live position.', 'reviewing');
   }
   renderMoveList();
+  refreshEvalBarForPly(viewPly); // fire-and-forget; jumpToPly stays sync
 }
 
 function setStatus(text, cls) {
@@ -575,6 +576,23 @@ async function maybeBotMove() {
   }
   setStatus((humanColor === 'w' ? 'White' : 'Black') + ' to move');
   preMoveEval = await refreshEvalForCurrentPosition();
+}
+
+// jumpToPly fires this for whichever position is now displayed, so the
+// score bar always matches the board -- it used to just sit frozen on
+// whatever the live position last fetched, wrong the moment you browsed
+// away from it. Sequence-guarded because clicking through history fast
+// can fire several of these before the slower ones resolve; only the
+// latest should ever win. Deliberately leaves the "top engine moves"
+// hints panel alone -- that one intentionally always answers the live
+// pending decision, not whatever you're browsing (see renderTopMoves).
+let evalBarRequestSeq = 0;
+
+async function refreshEvalBarForPly(ply) {
+  const seq = ++evalBarRequestSeq;
+  const data = await fetchEval(fenAtPly(ply));
+  if (seq !== evalBarRequestSeq) return;
+  updateEvalBar(data.gameOver ? null : (data.lines[0] ? data.lines[0].score : null));
 }
 
 let selectedSquare = null;
