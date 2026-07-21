@@ -40,10 +40,8 @@
       "Bash(curl -s https://checkip.amazonaws.com*)",
       "Bash(curl -s * https://dty47fe9cic2a.cloudfront.net*)",
 
-      "Bash(ssh -i ~/.ssh/chess-trainer-key.pem ec2-user@44.227.208.213 'cat /opt/chess-trainer/invites.json'*)",
-      "Bash(ssh -i ~/.ssh/chess-trainer-key.pem ec2-user@44.227.208.213 'docker logs trainer*)",
-      "Bash(ssh -i ~/.ssh/chess-trainer-key.pem ec2-user@44.227.208.213 'docker ps*)",
-      "Bash(ssh -i ~/.ssh/chess-trainer-key.pem ec2-user@44.227.208.213 'crontab -l*)"
+      "Bash(ssh -i ~/.ssh/chess-trainer-key.pem ec2-user@44.227.208.213 *)",
+      "Bash(scp -i ~/.ssh/chess-trainer-key.pem *)"
     ]
   }
 }
