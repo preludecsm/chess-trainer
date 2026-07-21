@@ -139,6 +139,8 @@ ssh -i ~/.ssh/chess-trainer-key.pem ec2-user@44.227.208.213 \
    && docker run -d --name trainer --restart always -p 80:5001 \
         -e FIXED_DEPTH=3 \
         -e RATE_LIMIT_PER_MIN=10 -e WEB_CONCURRENCY=2 \
+        -e INVITES_PATH=/data/invites.json \
+        -v /opt/chess-trainer/invites.json:/data/invites.json:ro \
         175691005574.dkr.ecr.us-west-2.amazonaws.com/chess-trainer:latest"
 ```
 
@@ -218,3 +220,65 @@ stranger hitting the hosted instance.
    invite-only link; watch CloudWatch for a couple of weeks.
 4. Decide B vs C from observed traffic shape (spiky → Lambda, steady →
    Fargate); the Dockerfile from step 2 works for either.
+
+## Invites, usage logging, and the daily report (2026-07-21)
+
+Per-person invite gating, structured usage logging, and a daily emailed
+usage summary are live. Deliberately built **without any AWS IAM changes**
+— the deploy IAM user (`chesstrainer`) is locked down (no `iam:CreateRole`,
+no `logs:PutLogEvents`, no `ses:*`), and loosening it just to get a usage
+report wasn't worth it. Real CloudWatch Logs + SES remain an option later
+if that changes; see the note at the bottom of this section.
+
+**Invite gate** (`web_trainer/server.py`): `INVITES_PATH` env var points at
+a JSON file (`{token: {"label": "..."}}`) on the host, bind-mounted
+read-only into the container. `before_request` checks a cookie against it,
+re-reading the file fresh on every single request — no in-memory cache, so
+revoking a token takes effect on that visitor's very next request, no
+restart. `/invite/<token>` is the only ungated route; it validates the
+token and sets the cookie. Unset locally, so local dev is unaffected.
+
+Managed via `scripts/manage_invites.py`, deployed to
+`/opt/chess-trainer/manage_invites.py` on the host:
+
+```bash
+ssh -i ~/.ssh/chess-trainer-key.pem ec2-user@44.227.208.213
+sudo python3 /opt/chess-trainer/manage_invites.py add "Alice"     # prints the invite link
+sudo python3 /opt/chess-trainer/manage_invites.py revoke "Alice"  # or the raw token
+sudo python3 /opt/chess-trainer/manage_invites.py list
+```
+
+**Usage logging**: `server.py` writes one JSON line to stdout per bot move
+(`personality`, `depth`, `latency_ms`, `invite` label, hashed IP) via a
+dedicated `chess_trainer.usage` logger. Docker captures stdout locally
+regardless of any shipping config, so `docker logs trainer` is a complete
+record with zero extra setup.
+
+**Daily report** (`scripts/daily_report.py`, deployed to
+`/opt/chess-trainer/daily_report.py`): reads `docker logs trainer --since
+24h`, aggregates total moves / unique invites / personality popularity /
+p95 latency, and emails the summary via iCloud SMTP
+(`smtp.mail.me.com:587`, app-specific password at
+`/opt/chess-trainer/icloud_smtp_password`, mode 600, not in git) to
+`beaters-remote.8n@icloud.com`. Installed as an `ec2-user` crontab entry
+using `CRON_TZ=America/Los_Angeles` (not a fixed UTC offset, so it doesn't
+drift across DST):
+
+```
+CRON_TZ=America/Los_Angeles
+0 8 * * * /usr/bin/python3 /opt/chess-trainer/daily_report.py >> /opt/chess-trainer/daily_report.log 2>&1
+```
+
+**If real CloudWatch/SES becomes worth it later** (dashboards, alarms,
+longer retention than the container's log buffer): grant the
+`chesstrainer` IAM user `logs:PutLogEvents`/`CreateLogStream`, switch the
+`docker run` in the redeploy command to `--log-driver=awslogs`, and either
+keep this SMTP-based script (pointed at CloudWatch Logs Insights instead
+of `docker logs`) or move to SES. Not needed at current scale (2–5
+concurrent invites) — the local-log approach costs nothing extra and
+required no security-scope tradeoffs.
+
+Also fixed in passing: SSH access is `/32`-scoped to a home IP that had
+drifted since the original deploy (see the redeploy note above) — updated
+the security group's ingress rule to the current IP. This will recur;
+there's no dynamic-DNS or VPN in front of it yet.
