@@ -11,13 +11,17 @@ Binds to 127.0.0.1 only. Do not rebind to 0.0.0.0 without the rate
 limiting and abuse controls described in MIGRATION.md.
 """
 import atexit
+import hashlib
+import json
+import logging
 import os
 import sys
 import threading
+import time
 
 import chess
 import chess.engine
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, jsonify, make_response, redirect, request, send_from_directory
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from personality_bots import (  # noqa: E402
@@ -52,6 +56,21 @@ FIXED_DEPTH = int(_fixed_depth_env) if _fixed_depth_env else None
 # effective allowance is bucket_size x workers -- fine at this scale).
 # 0 disables (the local default); public deployments set e.g. 10.
 RATE_LIMIT_PER_MIN = int(os.environ.get("RATE_LIMIT_PER_MIN", "0"))
+
+# Per-person invite gating. When set, every page and API request must carry
+# a cookie matching a token in this file, except the /invite/<token> claim
+# route itself. Unset (the local default) disables the gate entirely.
+INVITES_PATH = os.environ.get("INVITES_PATH", "").strip()
+
+# Structured usage logging, one JSON line per bot move, to stdout -- Docker
+# captures stdout regardless of transport, so this is useful whether or not
+# anything ships it further (see MIGRATION.md for the CloudWatch story).
+_usage_log = logging.getLogger("chess_trainer.usage")
+_usage_log.setLevel(logging.INFO)
+_usage_handler = logging.StreamHandler(sys.stdout)
+_usage_handler.setFormatter(logging.Formatter("%(message)s"))
+_usage_log.addHandler(_usage_handler)
+_usage_log.propagate = False
 
 app = Flask(__name__, static_folder="static", static_url_path="")
 # Vendored libs/piece images are immutable; without this Flask sends
@@ -109,7 +128,6 @@ def _rate_limited() -> bool:
     """Token bucket: RATE_LIMIT_PER_MIN tokens/min per client IP."""
     if RATE_LIMIT_PER_MIN <= 0:
         return False
-    import time
     now = time.monotonic()
     ip = _client_ip()
     with _buckets_lock:
@@ -145,6 +163,56 @@ def score_to_json(pov_score: chess.engine.PovScore) -> dict:
     if score.is_mate():
         return {"mate": score.mate()}
     return {"cp": score.score()}
+
+
+def _load_invites() -> dict:
+    """Re-read from disk on every call. No in-memory cache: this is what
+    makes revocation take effect on the very next request instead of
+    requiring a server restart."""
+    if not INVITES_PATH:
+        return {}
+    try:
+        with open(INVITES_PATH) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def _invite_label():
+    token = request.cookies.get("invite", "")
+    if not token:
+        return None
+    return _load_invites().get(token, {}).get("label")
+
+
+@app.before_request
+def _require_invite():
+    if not INVITES_PATH or request.path.startswith("/invite/"):
+        return None
+    if _invite_label() is None:
+        if request.path.startswith("/api/"):
+            return jsonify({"error": "invite required"}), 401
+        return (
+            "<p style='font-family:sans-serif;margin:3em auto;max-width:30em;"
+            "text-align:center'>This trainer is invite-only. "
+            "Ask for a link.</p>",
+            403,
+        )
+    return None
+
+
+@app.route("/invite/<token>")
+def claim_invite(token):
+    if token not in _load_invites():
+        return (
+            "<p style='font-family:sans-serif;margin:3em auto;max-width:30em;"
+            "text-align:center'>Invalid or revoked invite link.</p>",
+            403,
+        )
+    resp = make_response(redirect("/"))
+    resp.set_cookie("invite", token, max_age=365 * 24 * 3600,
+                     httponly=True, secure=True, samesite="Lax")
+    return resp
 
 
 @app.route("/")
@@ -210,9 +278,21 @@ def bot_move():
     if personality not in PERSONALITIES:
         return jsonify({"error": f"Unknown personality: {personality}"}), 400
 
+    start = time.monotonic()
     bot = PERSONALITIES[personality](depth=depth)
     move = bot.select(board)
+    latency_ms = int((time.monotonic() - start) * 1000)
     san = board.san(move)
+
+    _usage_log.info(json.dumps({
+        "event": "bot_move",
+        "personality": personality,
+        "depth": depth,
+        "latency_ms": latency_ms,
+        "invite": _invite_label() or "none",
+        "ip_hash": hashlib.sha256(_client_ip().encode()).hexdigest()[:12],
+    }))
+
     return jsonify({"uci": move.uci(), "san": san, "depth": depth})
 
 
