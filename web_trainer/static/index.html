@@ -252,8 +252,9 @@
         <p>Click any move to jump back and look at that position. From
         there you're not just looking — play a move and the game
         continues from that point instead, replacing whatever actually
-        happened next. Good for trying a different response to the same
-        early decision as many times as you want.</p>
+        happened next. Only works on positions where it's your move;
+        the status line says so if it isn't. Good for trying a different
+        response to the same early decision as many times as you want.</p>
       </div>
     </div>
 
@@ -292,7 +293,6 @@ let preMoveEval = null; // eval snapshot for the position before the human's mov
 let awaitingBot = false;
 let viewPly = 0; // which half-move we're currently displaying; game.history().length == live
 let gameEndedManually = null; // null, or {winnerColor: 'w'|'b'} after a resignation
-let gameStartFen = null; // null = standard start position; set by "Replay from here"
 
 function isGameOver() {
   return game.game_over() || gameEndedManually !== null;
@@ -358,31 +358,20 @@ function updateEvalBar(scoreObj) {
 }
 
 function renderMoveList() {
+  // Branching truncates and extends game's own history in place (see
+  // tryMove) rather than reloading a bare position, so game.history()
+  // is always the true, continuous move list from move 1 -- no separate
+  // start-point bookkeeping needed here.
   const history = game.history();
-  // A branched game's own move stack starts empty at the branch point,
-  // but the branch point itself can be anywhere in a real game -- number
-  // from gameStartFen's actual fullmove count/side-to-move, not from
-  // array position, or a branch from deep in a game wrongly displays as
-  // starting over at move 1.
-  const startParts = (gameStartFen || 'x x w x x 1').split(' ');
-  const startColor = startParts[1];
-  let moveNum = parseInt(startParts[5], 10) || 1;
-
   let out = '';
-  let i = 0;
-  if (startColor === 'b' && history.length > 0) {
-    out += moveNum + '... <span class="move-jump" data-ply="1">' + history[0] + '</span><br>';
-    i = 1;
-    moveNum++;
-  }
-  for (; i < history.length; i += 2) {
+  for (let i = 0; i < history.length; i += 2) {
+    const moveNum = i / 2 + 1;
     out += moveNum + '. ';
     out += '<span class="move-jump" data-ply="' + (i + 1) + '">' + history[i] + '</span> ';
     if (history[i + 1]) {
       out += '<span class="move-jump" data-ply="' + (i + 2) + '">' + history[i + 1] + '</span>';
     }
     out += '<br>';
-    moveNum++;
   }
   document.getElementById('moveList').innerHTML = out || '—';
   $('#moveList [data-ply="' + viewPly + '"]').addClass('current-ply');
@@ -395,10 +384,12 @@ function isLive() {
 function fenAtPly(ply) {
   // Reconstruct the position after `ply` half-moves by replaying from
   // scratch, rather than maintaining a parallel FEN array that could get
-  // out of sync with `game` across moves/takebacks/new games. Games that
-  // branched from a reviewed position don't start at the standard
-  // position, so the scratch board has to start from gameStartFen too.
-  const scratch = gameStartFen ? new Chess(gameStartFen) : new Chess();
+  // out of sync with `game` across moves/takebacks/branches/new games.
+  // Every game always starts at the standard position -- branching
+  // truncates and extends game's own history in place (see tryMove)
+  // rather than reloading a bare FEN, so there's no other start point
+  // to account for here.
+  const scratch = new Chess();
   const moves = game.history({verbose: true}).slice(0, ply);
   moves.forEach(m => scratch.move({from: m.from, to: m.to, promotion: m.promotion}));
   return scratch.fen();
@@ -436,8 +427,14 @@ function jumpToPly(ply) {
                                              : currentPersonality() + ' is thinking…'));
     }
   } else {
-    setStatus('Reviewing move ' + viewPly + ' of ' + max +
-      ' — play a move to branch from here, or ⏭ for the live position.', 'reviewing');
+    // Branching only works where it's actually the human's move in the
+    // DISPLAYED position -- say so explicitly rather than letting a
+    // move attempt silently do nothing with no explanation.
+    const canBranch = !reviewedPositionOver() && reviewedTurn() === humanColor;
+    setStatus('Reviewing move ' + viewPly + ' of ' + max + ' — ' +
+      (canBranch ? 'play a move to branch from here'
+                 : 'that’s ' + currentPersonality() + '’s move; step back further to branch as yourself') +
+      ', or ⏭ for the live position.', 'reviewing');
   }
   renderMoveList();
 }
@@ -619,15 +616,17 @@ function tryMove(source, target) {
     // Playing a move on a reviewed (non-live) position branches: whatever
     // actually followed it is discarded, and the game continues from here
     // instead. Validate on a scratch board FIRST -- an illegal attempt
-    // (e.g. a misclick while just looking at history) must not silently
-    // discard the future line just because it touched game.load().
+    // (e.g. a misclick while just looking at history) must not truncate
+    // the real game just because it was attempted.
     const fen = fenAtPly(viewPly);
     if (new Chess(fen).move({from: source, to: target, promotion: 'q'}) === null) {
       return null;
     }
-    game.load(fen);
-    gameStartFen = fen;
-    viewPly = 0;
+    // Pop game's own history back to the branch point (not a full
+    // reload), so everything BEFORE it -- the actual moves, not just the
+    // resulting position -- stays intact for the move list, Copy PGN,
+    // and further navigation.
+    while (game.history().length > viewPly) game.undo();
     gameEndedManually = null; // belonged to the now-discarded continuation
   }
   return game.move({from: source, to: target, promotion: 'q'});
@@ -707,7 +706,6 @@ function onSnapEnd() {
 function startNewGame() {
   game.reset();
   viewPly = 0;
-  gameStartFen = null;
   gameEndedManually = null;
   humanColor = document.getElementById('color').value === 'white' ? 'w' : 'b';
   preMoveEval = null;
@@ -763,11 +761,6 @@ function gamePgn() {
   }
   game.header('Event', 'Personality Chess Trainer', 'Site', location.hostname || 'localhost',
               'White', white, 'Black', black, 'Result', result);
-  if (gameStartFen) {
-    // Games started via "Replay from here" don't begin at the standard
-    // position -- PGN needs FEN/SetUp headers to be reconstructable.
-    game.header('FEN', gameStartFen, 'SetUp', '1');
-  }
   return game.pgn();
 }
 
