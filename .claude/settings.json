@@ -1,0 +1,40 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git status*)",
+      "Bash(git diff*)",
+      "Bash(git log*)",
+      "Bash(git show*)",
+      "Bash(git add *)",
+      "Bash(git commit -m *)",
+
+      "Bash(docker build *)",
+      "Bash(docker push *)",
+      "Bash(docker logs *)",
+      "Bash(docker ps*)",
+      "Bash(docker images*)",
+
+      "Bash(aws sts get-caller-identity*)",
+      "Bash(aws ec2 describe-*)",
+      "Bash(aws ecr get-login-password*)",
+      "Bash(aws iam list-*)",
+      "Bash(aws iam get-*)",
+      "Bash(aws sesv2 list-*)",
+
+      "Bash(python3 -c *)",
+      "Bash(python3 -m json.tool*)",
+      "Bash(chmod +x *)",
+      "Bash(lsof -i :5001*)",
+      "Bash(pkill -f \"server.py\"*)",
+      "Bash(venv-pypy/bin/python server.py*)",
+
+      "Bash(curl -s http://127.0.0.1:5001/*)",
+      "Bash(curl -s http://localhost:5001/*)",
+      "Bash(curl -s -X POST http://127.0.0.1:5001/*)",
+      "Bash(curl -s -X POST http://localhost:5001/*)",
+      "Bash(curl -s -o /dev/null -w *http://127.0.0.1:5001/*)",
+      "Bash(curl -s -o /dev/null -w *http://localhost:5001/*)",
+      "Bash(curl -s https://checkip.amazonaws.com*)"
+    ]
+  }
+}

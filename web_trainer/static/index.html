@@ -8,6 +8,15 @@
 <script src="vendor/chess.js"></script>
 <script src="vendor/chessboard.min.js"></script>
 <style>
+  html {
+    /* Reserve the scrollbar's width whether or not it's actually showing --
+       otherwise the page growing past viewport height (more move-list rows)
+       makes a scrollbar appear, which shrinks available content width by
+       its own size, which reflows any borderline-width label from one line
+       to two, which shifts everything below it. That's what was making the
+       move-nav buttons drift even after they were pinned above the list. */
+    scrollbar-gutter: stable;
+  }
   body {
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     background: #1e1e1e;
@@ -48,6 +57,7 @@
     letter-spacing: 0.04em;
     color: #999;
     margin-bottom: 4px;
+    white-space: nowrap; /* a header wrapping to 2 lines shifts everything below it */
   }
   select, button, input[type=number] {
     font-size: 14px;
@@ -293,6 +303,15 @@ let preMoveEval = null; // eval snapshot for the position before the human's mov
 let awaitingBot = false;
 let viewPly = 0; // which half-move we're currently displaying; game.history().length == live
 let gameEndedManually = null; // null, or {winnerColor: 'w'|'b'} after a resignation
+let liveFeedbackText = ''; // last "cost about X pawns" message for the LIVE tip
+
+// Single setter so jumpToPly can tell "no feedback yet" (live tip) apart
+// from "browsing away from it" -- both blank the div, but only the former
+// should reappear when you jump back to the live position.
+function setFeedback(text) {
+  liveFeedbackText = text;
+  document.getElementById('feedback').textContent = text;
+}
 
 function isGameOver() {
   return game.game_over() || gameEndedManually !== null;
@@ -437,6 +456,10 @@ function jumpToPly(ply) {
       ', or ⏭ for the live position.', 'reviewing');
   }
   renderMoveList();
+  // The "cost about X pawns" feedback describes a specific move at the live
+  // tip -- it doesn't apply to whatever historical ply is now on screen, so
+  // hide it while browsing and bring it back exactly when you return live.
+  document.getElementById('feedback').textContent = isLive() ? liveFeedbackText : '';
   refreshEvalBarForPly(viewPly); // fire-and-forget; jumpToPly stays sync
 }
 
@@ -654,7 +677,7 @@ async function afterMove() {
   viewPly = game.history().length;
   board.position(game.fen());
   renderMoveList();
-  document.getElementById('feedback').textContent = '';
+  setFeedback('');
 
   if (game.game_over()) {
     setStatus(describeGameOver());
@@ -670,7 +693,7 @@ async function afterMove() {
     // of the resulting position, which is exactly what /api/eval returns
     // (server always scores from White's perspective).
     const postScore = postData.lines[0] ? postData.lines[0].score : null;
-    document.getElementById('feedback').textContent = evalSwingMessage(preMoveEval, postScore);
+    setFeedback(evalSwingMessage(preMoveEval, postScore));
   }
   updateEvalBar(postData.lines[0] ? postData.lines[0].score : null);
   renderTopMoves(postData.lines);
@@ -727,7 +750,7 @@ function startNewGame() {
   gameEndedManually = null;
   humanColor = document.getElementById('color').value === 'white' ? 'w' : 'b';
   preMoveEval = null;
-  document.getElementById('feedback').textContent = '';
+  setFeedback('');
   board.orientation(humanColor === 'w' ? 'white' : 'black');
   board.position('start');
   renderMoveList();
@@ -752,7 +775,7 @@ function takeback() {
 
   board.position(game.fen());
   renderMoveList();
-  document.getElementById('feedback').textContent = '';
+  setFeedback('');
   setStatus((humanColor === 'w' ? 'White' : 'Black') + ' to move');
   refreshEvalForCurrentPosition().then(data => { preMoveEval = data; });
   maybeBotMove(); // no-op if it's already the human's turn
