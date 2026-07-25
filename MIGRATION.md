@@ -269,6 +269,23 @@ CRON_TZ=America/Los_Angeles
 0 8 * * * /usr/bin/python3 /opt/chess-trainer/daily_report.py >> /opt/chess-trainer/daily_report.log 2>&1
 ```
 
+**Silent-failure bug, found 2026-07-25**: no report ever arrived. `/opt/chess-trainer`
+was `root:root` mode 755 from the original `sudo mkdir`, so `ec2-user`'s
+crontab couldn't create `daily_report.log` -- the shell's own `>>`
+redirect failed with `Permission denied` before the script ever ran, and
+with nowhere to log that failure (no MTA configured to catch cron's
+failure mail either), it was invisible. The manual verification done at
+setup time missed this because it ran the script directly without the
+`>>` redirect, so it never exercised the actual failure path. Fixed with
+`chown ec2-user:ec2-user /opt/chess-trainer` (files inside keep their own
+ownership -- `invites.json` stays `root:root`, still edited via `sudo`).
+Confirmed working via a `CRON_TZ`-scheduled test job a few minutes out
+(proved the scheduling mechanism itself was fine) and by reproducing the
+exact cron command line by hand (isolated the actual failure). **Lesson**:
+when verifying a cron job, run the *exact* command line including its
+redirects -- not just the underlying script -- or a permissions gap like
+this one stays invisible until someone notices the silence.
+
 **If real CloudWatch/SES becomes worth it later** (dashboards, alarms,
 longer retention than the container's log buffer): grant the
 `chesstrainer` IAM user `logs:PutLogEvents`/`CreateLogStream`, switch the
