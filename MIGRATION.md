@@ -239,14 +239,9 @@ restart. `/invite/<token>` is the only ungated route; it validates the
 token and sets the cookie. Unset locally, so local dev is unaffected.
 
 Managed via `scripts/manage_invites.py`, deployed to
-`/opt/chess-trainer/manage_invites.py` on the host:
-
-```bash
-ssh -i ~/.ssh/chess-trainer-key.pem ec2-user@44.227.208.213
-sudo python3 /opt/chess-trainer/manage_invites.py add "Alice"     # prints the invite link
-sudo python3 /opt/chess-trainer/manage_invites.py revoke "Alice"  # or the raw token
-sudo python3 /opt/chess-trainer/manage_invites.py list
-```
+`/opt/chess-trainer/manage_invites.py` on the host — see
+[README.md's "Managing hosted invites"](README.md#managing-hosted-invites)
+for the add/revoke/list commands.
 
 **Usage logging**: `server.py` writes one JSON line to stdout per bot move
 (`personality`, `depth`, `latency_ms`, `invite` label, hashed IP) via a

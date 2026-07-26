@@ -9,8 +9,9 @@ local server, with live Stockfish feedback after every move.
 > **decommissioned** — the bot process, its LaunchAgent, and its PATH
 > symlinks are disabled. The browser trainer (`web_trainer/`) is now the
 > primary interface. See [Legacy: Lichess deployment](#legacy-lichess-deployment-decommissioned)
-> for what remains and how to reactivate it. A public multi-user AWS
-> deployment is planned — see [MIGRATION.md](MIGRATION.md).
+> for what remains and how to reactivate it. A public, invite-only AWS
+> deployment is live — see [Managing hosted invites](#managing-hosted-invites)
+> and [MIGRATION.md](MIGRATION.md) for how it's built.
 
 > **Working on this project?** Read [NOTES.md](NOTES.md) first — it has the
 > design rationale, the experiments that were tried and measured and
@@ -250,6 +251,27 @@ returns.
 | Every eval fails after one bad request | The shared Stockfish process died — restart the server |
 | Bot plays the same moves every game | `RANDOM_MARGIN` is 0 for that personality — set it to 0.25 |
 | Moves instant AND bad | Root-window bug signature — see "The bug that mattered" |
+
+## Managing hosted invites
+
+The hosted deployment (https://dty47fe9cic2a.cloudfront.net) is
+invite-only: every page and API request needs a cookie matching a token
+in a file on the EC2 host, checked fresh on every request — see
+[MIGRATION.md](MIGRATION.md) for how the gate itself works. Issue,
+revoke, and list tokens via `scripts/manage_invites.py`, deployed to
+`/opt/chess-trainer/manage_invites.py` on the host:
+
+```bash
+ssh -i ~/.ssh/chess-trainer-key.pem ec2-user@44.227.208.213
+sudo python3 /opt/chess-trainer/manage_invites.py add "Alice"     # prints the invite link
+sudo python3 /opt/chess-trainer/manage_invites.py revoke "Alice"  # or the raw token
+sudo python3 /opt/chess-trainer/manage_invites.py list            # see who currently has access
+```
+
+Revoking takes effect on that person's very next request — no server
+restart needed. There's no separate "active accounts" list beyond this:
+`list` shows every currently-valid token and its label, which is the full
+account state.
 
 ## Legacy: Lichess deployment (decommissioned)
 
