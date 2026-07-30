@@ -1,6 +1,9 @@
 lichess-bot/
 *.pdf
 .DS_Store
+
+# Tailscale IPs, home WiFi IP, device hostnames — this repo is public
+REMOTE.md
 __pycache__/
 sample_fianchetto.pgn
 web_trainer/venv/
