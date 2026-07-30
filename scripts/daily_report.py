@@ -20,9 +20,11 @@ CONTAINER = "trainer"
 SINCE = "24h"
 SMTP_HOST = "smtp.mail.me.com"
 SMTP_PORT = 587
-SMTP_USER = "REDACTED_EMAIL"
+# Sender/recipient addresses live in untracked files on the EC2 host, same as the
+# password below -- this script is committed to a public repo, they are not.
+SMTP_USER = Path("/opt/chess-trainer/icloud_smtp_user").read_text().strip()
 PASSWORD_PATH = Path("/opt/chess-trainer/icloud_smtp_password")
-TO_ADDR = "REDACTED_EMAIL"
+TO_ADDR = Path("/opt/chess-trainer/icloud_smtp_to").read_text().strip()
 
 
 def fetch_events():
