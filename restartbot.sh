@@ -8,7 +8,7 @@
 # Lichess rate-limits reconnections to the event stream. This script kills
 # the process, waits for the limit to go cold, and starts once.
 export PATH="/opt/homebrew/bin:$PATH"
-BOTDIR="$HOME/Documents/Mick/Chess/lichess-bot"
+BOTDIR="$HOME/dev/chess/lichess-bot"
 
 echo "Stopping the bot..."
 pkill -9 -f lichess-bot.py 2>/dev/null

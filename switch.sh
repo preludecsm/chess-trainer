@@ -3,7 +3,7 @@
 # Writes the two control files. The running bot reads them at the start
 # of your next game. No restart.
 set -e
-BOTDIR=~/Documents/Mick/Chess/lichess-bot
+BOTDIR=~/dev/chess/lichess-bot
 PERSFILE="$BOTDIR/engine_personality.txt"
 DEPTHFILE="$BOTDIR/engine_depth.txt"
 

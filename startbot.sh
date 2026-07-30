@@ -1,7 +1,7 @@
 #!/bin/bash
 # Idempotent: reports if the bot is running, starts it if not.
 export PATH="/opt/homebrew/bin:$PATH"
-BOTDIR="$HOME/Documents/Mick/Chess/lichess-bot"
+BOTDIR="$HOME/dev/chess/lichess-bot"
 
 if tmux has-session -t chessbot 2>/dev/null && pgrep -f lichess-bot.py >/dev/null; then
   echo "Bot is running."

@@ -21,7 +21,7 @@ local server, with live Stockfish feedback after every move.
 > disproven with numbers.
 
 > **Personal project.** Paths and hardware (a Mac mini under
-> `~/Documents/Mick/Chess`) are mine. Adaptable, but expect to substitute
+> `~/dev/chess`) are mine. Adaptable, but expect to substitute
 > your own paths. Shared as-is; no support implied.
 
 ## Repository layout
