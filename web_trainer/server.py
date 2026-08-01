@@ -7,8 +7,11 @@ a native Stockfish binary over UCI. Stateless by design: the client
 sends the FEN with every request, so the server holds no game state
 (which is also what will make multi-user hosting straightforward).
 
-Binds to 127.0.0.1 only. Do not rebind to 0.0.0.0 without the rate
-limiting and abuse controls described in MIGRATION.md.
+Binds to 127.0.0.1 and, if TAILSCALE_BIND is set, additionally to that
+specific Tailscale interface IP -- never to 0.0.0.0. A Tailscale-scoped
+bind is reachable only by devices on the private tailnet, not the open
+LAN or internet, so it doesn't need the rate limiting and abuse controls
+described in MIGRATION.md the way a public 0.0.0.0 bind would.
 """
 import atexit
 import hashlib
@@ -298,4 +301,18 @@ def bot_move():
 
 if __name__ == "__main__":
     print("Chess trainer running at http://localhost:5001")
+
+    tailscale_bind = os.environ.get("TAILSCALE_BIND", "").strip()
+    if tailscale_bind:
+        if tailscale_bind in ("0.0.0.0", "::"):
+            raise SystemExit(
+                "TAILSCALE_BIND must be a specific Tailscale interface IP, "
+                "not a wildcard bind -- refusing to start."
+            )
+        print(f"Also listening on http://{tailscale_bind}:5001 (Tailscale only)")
+        threading.Thread(
+            target=lambda: app.run(host=tailscale_bind, port=5001, debug=False, use_reloader=False),
+            daemon=True,
+        ).start()
+
     app.run(host="127.0.0.1", port=5001, debug=False)
