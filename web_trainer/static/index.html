@@ -122,6 +122,41 @@
     font-weight: 600;
     margin-bottom: 10px;
   }
+  .cp-hist-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: #bbb;
+    margin-bottom: 3px;
+  }
+  .cp-hist-label {
+    width: 52px;
+    flex: none;
+    text-align: right;
+    color: #999;
+  }
+  .cp-hist-bars {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    min-width: 0;
+  }
+  .cp-hist-bar {
+    height: 6px;
+    border-radius: 2px;
+    min-width: 2px;
+  }
+  .cp-hist-bar.you { background: #3a6ea5; }
+  .cp-hist-bar.bot { background: #c07a3a; }
+  .cp-hist-count {
+    width: 44px;
+    flex: none;
+    text-align: right;
+    color: #777;
+    font-variant-numeric: tabular-nums;
+  }
   .move-line {
     font-size: 13px;
     padding: 4px 0;
@@ -296,6 +331,16 @@
         <input type="checkbox" id="showHints"> Show hints before I move
       </label>
     </div>
+
+    <div class="panel">
+      <label>Move quality this game (centipawn loss)</label>
+      <div style="font-size:12px; color:#999; margin-bottom:6px;">
+        <span style="color:#3a6ea5;">■</span> You
+        &nbsp;&nbsp;<span style="color:#c07a3a;">■</span> Bot
+      </div>
+      <div id="cpHist"></div>
+      <div id="cpHistSummary" style="font-size:12px; color:#999; margin-top:6px;"></div>
+    </div>
   </div>
 </div>
 
@@ -308,6 +353,11 @@ let awaitingBot = false;
 let viewPly = 0; // which half-move we're currently displaying; game.history().length == live
 let gameEndedManually = null; // null, or {winnerColor: 'w'|'b'} after a resignation
 let liveFeedbackText = ''; // last "cost about X pawns" message for the LIVE tip
+let moveCosts = []; // {ply, mover: 'w'|'b', cost}, one per SCORED move this game --
+// see recordMoveCost. Whole-game summary data, so unlike viewPly/board it is
+// deliberately NOT touched by jumpToPly (browsing history shouldn't change
+// what the histogram reports); it IS truncated wherever game.history() itself
+// is truncated (takeback, branching) so it never describes a discarded line.
 
 // Single setter so jumpToPly can tell "no feedback yet" (live tip) apart
 // from "browsing away from it" -- both blank the div, but only the former
@@ -563,18 +613,95 @@ async function refreshEvalForCurrentPosition() {
   return data;
 }
 
-function evalSwingMessage(preData, postScoreWhitePov) {
-  if (!preData || !preData.lines || preData.lines.length === 0) return '';
+function moveCost(preData, postScoreWhitePov, moverColor) {
+  // Centipawn loss for moverColor's move: how much worse the position
+  // actually became, from their POV, than the engine's best line before
+  // they moved. Shared by the human-facing feedback message and the
+  // move-quality histogram (which also scores the bot's moves -- this is
+  // exactly the pre/post eval pair maybeBotMove already fetches for the
+  // eval bar, so recording it there is free).
+  if (!preData || !preData.lines || preData.lines.length === 0) return null;
+  if (!postScoreWhitePov) return null; // e.g. resulting position is unscored
   const bestBefore = scoreToNumeric(preData.lines[0].score);
   const actualAfter = scoreToNumeric(postScoreWhitePov);
-  // Cost is measured from the mover's perspective: for White, dropping
-  // below the pre-move best is bad; for Black it's the mirror image.
-  const cost = humanColor === 'w' ? (bestBefore - actualAfter) : (actualAfter - bestBefore);
+  // For White, dropping below the pre-move best is bad; for Black it's
+  // the mirror image. Clamp at 0 -- multipv/search noise can otherwise
+  // make "after" look slightly better than "before"'s best, which just
+  // means the move matched or beat the top choice, not negative loss.
+  const cost = moverColor === 'w' ? (bestBefore - actualAfter) : (actualAfter - bestBefore);
+  return Math.max(0, cost);
+}
+
+function evalSwingMessage(preData, postScoreWhitePov) {
+  const cost = moveCost(preData, postScoreWhitePov, humanColor);
+  if (cost === null) return '';
   const pawns = (cost / 100).toFixed(2);
   if (cost <= 5) return '✓ That matched (or beat) the engine\'s top choice.';
   if (cost < 50) return 'Close — cost about ' + pawns + ' pawns vs. ' + preData.lines[0].san + '.';
   return '⚠ Cost about ' + pawns + ' pawns. Engine preferred ' + preData.lines[0].san +
          (preData.lines[1] ? (' or ' + preData.lines[1].san) : '') + '.';
+}
+
+// Buckets mirror the rough shape of lichess/chess.com's inaccuracy/mistake/
+// blunder tiers, but in raw centipawns rather than their win%-based curve --
+// simpler, and consistent with the cp figures already shown elsewhere here.
+const CP_BUCKETS = [
+  {max: 10,       label: '0–10'},
+  {max: 25,       label: '10–25'},
+  {max: 50,       label: '25–50'},
+  {max: 100,      label: '50–100'},
+  {max: 200,      label: '100–200'},
+  {max: Infinity, label: '200+'},
+];
+
+function cpBucketIndex(cp) {
+  for (let i = 0; i < CP_BUCKETS.length; i++) {
+    if (cp <= CP_BUCKETS[i].max) return i;
+  }
+  return CP_BUCKETS.length - 1;
+}
+
+function recordMoveCost(ply, moverColor, cost) {
+  if (cost === null) return;
+  moveCosts.push({ply: ply, mover: moverColor, cost: cost});
+  renderCpHistogram();
+}
+
+function renderCpHistogram() {
+  const el = document.getElementById('cpHist');
+  const summaryEl = document.getElementById('cpHistSummary');
+  if (moveCosts.length === 0) {
+    el.innerHTML = '<div style="font-size:12px; color:#777;">No moves scored yet.</div>';
+    summaryEl.textContent = '';
+    return;
+  }
+
+  const you = moveCosts.filter(e => e.mover === humanColor);
+  const bot = moveCosts.filter(e => e.mover !== humanColor);
+  const youCounts = new Array(CP_BUCKETS.length).fill(0);
+  const botCounts = new Array(CP_BUCKETS.length).fill(0);
+  you.forEach(e => youCounts[cpBucketIndex(e.cost)]++);
+  bot.forEach(e => botCounts[cpBucketIndex(e.cost)]++);
+  const maxCount = Math.max(1, ...youCounts, ...botCounts);
+
+  el.innerHTML = CP_BUCKETS.map((b, i) => {
+    const yPct = (youCounts[i] / maxCount) * 100;
+    const bPct = (botCounts[i] / maxCount) * 100;
+    return '<div class="cp-hist-row">' +
+      '<span class="cp-hist-label">' + b.label + '</span>' +
+      '<div class="cp-hist-bars">' +
+        '<div class="cp-hist-bar you" style="width:' + yPct + '%;"></div>' +
+        '<div class="cp-hist-bar bot" style="width:' + bPct + '%;"></div>' +
+      '</div>' +
+      '<span class="cp-hist-count">' + youCounts[i] + ' / ' + botCounts[i] + '</span>' +
+    '</div>';
+  }).join('');
+
+  const avgPawns = arr => arr.length
+    ? (arr.reduce((s, e) => s + e.cost, 0) / arr.length / 100).toFixed(2)
+    : '--';
+  summaryEl.textContent = 'Avg loss — you: ' + avgPawns(you) + ' pawns (' + you.length +
+    ' moves), bot: ' + avgPawns(bot) + ' pawns (' + bot.length + ' moves)';
 }
 
 async function maybeBotMove() {
@@ -588,6 +715,8 @@ async function maybeBotMove() {
   setStatus(currentPersonality() + ' is thinking…', 'thinking');
   const personality = document.getElementById('personality').value;
   const depth = parseInt(document.getElementById('depth').value, 10);
+  const botColor = humanColor === 'w' ? 'b' : 'w';
+  const preBotEval = preMoveEval; // snapshot -- overwritten below once the bot's move resolves
 
   const data = await fetchBotMove(game.fen(), personality, depth);
   if (data.error) {
@@ -608,7 +737,10 @@ async function maybeBotMove() {
     return;
   }
   setStatus((humanColor === 'w' ? 'White' : 'Black') + ' to move');
-  preMoveEval = await refreshEvalForCurrentPosition();
+  const postData = await refreshEvalForCurrentPosition();
+  recordMoveCost(viewPly, botColor,
+    moveCost(preBotEval, postData && postData.lines[0] ? postData.lines[0].score : null, botColor));
+  preMoveEval = postData;
 }
 
 // jumpToPly fires this for whichever position is now displayed, so the
@@ -678,6 +810,8 @@ function tryMove(source, target) {
     // resulting position -- stays intact for the move list, Copy PGN,
     // and further navigation.
     while (game.history().length > viewPly) game.undo();
+    moveCosts = moveCosts.filter(e => e.ply <= viewPly); // discard costs from the abandoned line
+    renderCpHistogram();
     gameEndedManually = null; // belonged to the now-discarded continuation
   }
   return game.move({from: source, to: target, promotion: 'q'});
@@ -704,9 +838,11 @@ async function afterMove() {
     // (server always scores from White's perspective).
     const postScore = postData.lines[0] ? postData.lines[0].score : null;
     setFeedback(evalSwingMessage(preMoveEval, postScore));
+    recordMoveCost(viewPly, humanColor, moveCost(preMoveEval, postScore, humanColor));
   }
   updateEvalBar(postData.lines[0] ? postData.lines[0].score : null);
   renderTopMoves(postData.lines);
+  preMoveEval = postData; // becomes the pre-move eval for whoever moves next (the bot)
 
   await maybeBotMove();
 }
@@ -760,6 +896,8 @@ function startNewGame() {
   gameEndedManually = null;
   humanColor = document.getElementById('color').value === 'white' ? 'w' : 'b';
   preMoveEval = null;
+  moveCosts = [];
+  renderCpHistogram();
   setFeedback('');
   board.orientation(humanColor === 'w' ? 'white' : 'black');
   board.position('start');
@@ -782,6 +920,8 @@ function takeback() {
     if (game.turn() === humanColor) break;
   }
   viewPly = game.history().length;
+  moveCosts = moveCosts.filter(e => e.ply <= viewPly);
+  renderCpHistogram();
 
   board.position(game.fen());
   renderMoveList();
