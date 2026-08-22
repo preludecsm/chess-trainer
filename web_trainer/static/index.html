@@ -122,40 +122,40 @@
     font-weight: 600;
     margin-bottom: 10px;
   }
-  .cp-hist-row {
+  .cp-hist-chart {
     display: flex;
-    align-items: center;
+    align-items: flex-end;
     gap: 6px;
-    font-size: 11px;
-    color: #bbb;
-    margin-bottom: 3px;
+    height: 90px;
+    border-bottom: 1px solid #444;
+    padding: 0 2px;
   }
-  .cp-hist-label {
-    width: 52px;
-    flex: none;
-    text-align: right;
-    color: #999;
-  }
-  .cp-hist-bars {
+  .cp-hist-group {
     flex: 1;
     display: flex;
-    flex-direction: column;
-    gap: 1px;
+    align-items: flex-end;
+    justify-content: center;
+    gap: 3px;
+    height: 100%;
     min-width: 0;
   }
   .cp-hist-bar {
-    height: 6px;
-    border-radius: 2px;
-    min-width: 2px;
+    width: 45%;
+    border-radius: 2px 2px 0 0;
+    min-height: 2px;
   }
   .cp-hist-bar.you { background: #3a6ea5; }
   .cp-hist-bar.bot { background: #c07a3a; }
-  .cp-hist-count {
-    width: 44px;
-    flex: none;
-    text-align: right;
-    color: #777;
-    font-variant-numeric: tabular-nums;
+  .cp-hist-labels {
+    display: flex;
+    gap: 6px;
+    padding: 4px 2px 0;
+  }
+  .cp-hist-label {
+    flex: 1;
+    text-align: center;
+    font-size: 10px;
+    color: #999;
   }
   .move-line {
     font-size: 13px;
@@ -684,18 +684,20 @@ function renderCpHistogram() {
   bot.forEach(e => botCounts[cpBucketIndex(e.cost)]++);
   const maxCount = Math.max(1, ...youCounts, ...botCounts);
 
-  el.innerHTML = CP_BUCKETS.map((b, i) => {
+  // Bar height is the only encoded value (% of the largest bucket count in
+  // the chart) -- counts aren't printed anywhere since the bars already show
+  // them; a title attribute keeps the exact number one hover away.
+  const chart = CP_BUCKETS.map((b, i) => {
     const yPct = (youCounts[i] / maxCount) * 100;
     const bPct = (botCounts[i] / maxCount) * 100;
-    return '<div class="cp-hist-row">' +
-      '<span class="cp-hist-label">' + b.label + '</span>' +
-      '<div class="cp-hist-bars">' +
-        '<div class="cp-hist-bar you" style="width:' + yPct + '%;"></div>' +
-        '<div class="cp-hist-bar bot" style="width:' + bPct + '%;"></div>' +
-      '</div>' +
-      '<span class="cp-hist-count">' + youCounts[i] + ' / ' + botCounts[i] + '</span>' +
+    return '<div class="cp-hist-group">' +
+      '<div class="cp-hist-bar you" style="height:' + yPct + '%;" title="You: ' + youCounts[i] + '"></div>' +
+      '<div class="cp-hist-bar bot" style="height:' + bPct + '%;" title="Bot: ' + botCounts[i] + '"></div>' +
     '</div>';
   }).join('');
+  const labels = CP_BUCKETS.map(b => '<span class="cp-hist-label">' + b.label + '</span>').join('');
+  el.innerHTML = '<div class="cp-hist-chart">' + chart + '</div>' +
+                  '<div class="cp-hist-labels">' + labels + '</div>';
 
   const avgPawns = arr => arr.length
     ? (arr.reduce((s, e) => s + e.cost, 0) / arr.length / 100).toFixed(2)
