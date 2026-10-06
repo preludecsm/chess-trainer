@@ -312,7 +312,7 @@
         <label style="text-transform:none; letter-spacing:0; display:flex; align-items:center; gap:6px; cursor:pointer; margin:0;">
           <input type="checkbox" id="voiceMoves"> Voice moves
         </label>
-        <select id="voiceSelect" style="flex:1; min-width:0;"></select>
+        <select id="voiceSelect" style="flex:1; min-width:0;" title="Fallback voice -- only used if the server's own voice isn't available"></select>
       </div>
       <div class="row" style="margin-bottom:0;">
         <button id="copyPgn" class="secondary">Copy PGN</button>
@@ -696,14 +696,62 @@ function sanToSpeech(san) {
   return phrase + suffix;
 }
 
+// Preferred path: ask the server to synthesize the clip (macOS `say` with a
+// real downloaded voice, e.g. Ava Premium -- see /api/speak) and just play
+// the audio back. This is what makes the voice sound good on every device,
+// iPad included: iOS Safari's Web Speech API never exposes a downloaded
+// Enhanced/Premium system voice to web pages at all (a known WebKit
+// limitation, confirmed independent of browser), so the only way to get a
+// decent voice onto an iPad from a web page is to not use its speechSynthesis
+// at all. Falls back to the browser's own speechSynthesis + voice picker
+// below when the server can't do it (not macOS, or a request fails).
+let serverTtsUnavailable = false; // sticky once the server confirms it never can (501)
+let currentSpeechAudio = null;
+let speechQueue = Promise.resolve(); // chain so moves announce in play order, not fetch-completion order
+
 function speakMove(san) {
-  if (!document.getElementById('voiceMoves').checked || !('speechSynthesis' in window)) return;
-  const utterance = new SpeechSynthesisUtterance(sanToSpeech(san));
+  if (!document.getElementById('voiceMoves').checked) return;
+  const text = sanToSpeech(san);
+  if (!text) return;
+  speechQueue = speechQueue.then(() => speakOne(text)).catch(() => {});
+}
+
+async function speakOne(text) {
+  if (!serverTtsUnavailable && await speakViaServer(text)) return;
+  speakViaBrowser(text);
+}
+
+async function speakViaServer(text) {
+  try {
+    const res = await fetch('/api/speak', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({text: text}),
+    });
+    if (res.status === 501) { serverTtsUnavailable = true; return false; }
+    if (!res.ok) return false; // transient failure -- worth retrying next move
+    const url = URL.createObjectURL(await res.blob());
+    await new Promise(resolve => {
+      currentSpeechAudio = new Audio(url);
+      currentSpeechAudio.onended = resolve;
+      currentSpeechAudio.onerror = resolve;
+      currentSpeechAudio.play().catch(resolve);
+    });
+    URL.revokeObjectURL(url);
+    currentSpeechAudio = null;
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+function speakViaBrowser(text) {
+  if (!('speechSynthesis' in window)) return;
+  const utterance = new SpeechSynthesisUtterance(text);
   const voice = voices.find(v => v.name === selectedVoiceName);
   if (voice) utterance.voice = voice;
-  // speak() queues rather than interrupts, so the human's move and the
-  // bot's reply that follows it play back in order with no extra
-  // coordination needed.
+  // speak() queues rather than interrupts, so moves still play in order if
+  // this path is reached several times in a row.
   window.speechSynthesis.speak(utterance);
 }
 
@@ -1007,6 +1055,8 @@ function onSnapEnd() {
 
 function startNewGame() {
   if ('speechSynthesis' in window) window.speechSynthesis.cancel(); // drop any queued/playing announcements from the last game
+  if (currentSpeechAudio) { currentSpeechAudio.pause(); currentSpeechAudio = null; }
+  speechQueue = Promise.resolve();
   game.reset();
   viewPly = 0;
   gameEndedManually = null;

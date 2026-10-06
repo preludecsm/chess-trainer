@@ -18,7 +18,11 @@ import hashlib
 import json
 import logging
 import os
+import re
+import shutil
+import subprocess
 import sys
+import tempfile
 import threading
 import time
 
@@ -41,6 +45,18 @@ PERSONALITIES = {
 }
 
 STOCKFISH_PATH = os.environ.get("STOCKFISH_PATH", "/opt/homebrew/bin/stockfish")
+
+# Server-side move-announcement TTS via macOS's `say`. Only present on macOS
+# (None on the Linux-hosted public deployment) -- the client falls back to
+# its own browser speechSynthesis when /api/speak isn't available. The whole
+# point of doing this server-side at all: iOS Safari's Web Speech API never
+# exposes a downloaded Enhanced/Premium system voice to web pages (a known
+# WebKit limitation, confirmed independent of browser -- Safari, Chrome and
+# Firefox on iOS all share it), so a nicer voice has to come from somewhere
+# `say` can actually reach it -- this Mac itself.
+SAY_PATH = shutil.which("say")
+TTS_VOICE = os.environ.get("TTS_VOICE", "Ava (Premium)")
+_SPEAK_TEXT_RE = re.compile(r"^[A-Za-z0-9 ,.'\-]{1,120}$")
 EVAL_TIME = 0.5   # seconds per eval call; MultiPV=2 for the top-2 lines
 MIN_DEPTH = 1
 MAX_DEPTH = max(MIN_DEPTH, min(8, int(os.environ.get("MAX_DEPTH", "8"))))
@@ -297,6 +313,40 @@ def bot_move():
     }))
 
     return jsonify({"uci": move.uci(), "san": san, "depth": depth})
+
+
+@app.route("/api/speak", methods=["POST"])
+def speak():
+    """Synthesize a short move-announcement phrase with `say` and return the
+    audio. The client already converts SAN to plain English (sanToSpeech in
+    index.html); this endpoint has no chess-specific knowledge at all, just
+    text-to-speech -- so the allowlist regex only needs to admit plain words,
+    not validate chess content."""
+    if not SAY_PATH:
+        return jsonify({"error": "server-side TTS unavailable on this deployment"}), 501
+    data = request.get_json(silent=True) or {}
+    text = (data.get("text") or "").strip()
+    if not text or not _SPEAK_TEXT_RE.match(text):
+        return jsonify({"error": "bad request: plain words only, max 120 chars"}), 400
+
+    fd, path = tempfile.mkstemp(suffix=".m4a")
+    os.close(fd)
+    try:
+        subprocess.run(
+            [SAY_PATH, "-v", TTS_VOICE, "-o", path,
+             "--file-format=m4af", "--data-format=aac", text],
+            check=True, timeout=10, capture_output=True,
+        )
+        with open(path, "rb") as f:
+            audio = f.read()
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        return jsonify({"error": "tts synthesis failed"}), 500
+    finally:
+        os.unlink(path)
+
+    resp = make_response(audio)
+    resp.headers["Content-Type"] = "audio/mp4"
+    return resp
 
 
 if __name__ == "__main__":
