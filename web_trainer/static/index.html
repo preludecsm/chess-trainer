@@ -277,6 +277,11 @@
         <button id="takeback" class="secondary">Take Back</button>
         <button id="resign" class="secondary">Resign</button>
       </div>
+      <div class="row">
+        <label style="text-transform:none; letter-spacing:0; display:flex; align-items:center; gap:6px; cursor:pointer; margin:0;">
+          <input type="checkbox" id="voiceMoves"> Voice moves
+        </label>
+      </div>
       <div class="row" style="margin-bottom:0;">
         <button id="copyPgn" class="secondary">Copy PGN</button>
         <button id="analyzeLichess" class="secondary">Analyze on Lichess ↗</button>
@@ -642,6 +647,45 @@ function evalSwingMessage(preData, postScoreWhitePov) {
          (preData.lines[1] ? (' or ' + preData.lines[1].san) : '') + '.';
 }
 
+// Spoken move announcements (Web Speech API, built into the browser -- no
+// server involvement). SAN already carries everything needed: chess.js/
+// python-chess both append '+'/'#' to the string themselves, so the bot's
+// server-provided `san` and the human's game.history() entries need the
+// same parsing either way.
+const PIECE_NAMES = {K: 'king', Q: 'queen', R: 'rook', B: 'bishop', N: 'knight'};
+
+function sanToSpeech(san) {
+  if (!san) return '';
+  let s = san.trim();
+  let suffix = '';
+  if (s.endsWith('#')) { suffix = ', checkmate'; s = s.slice(0, -1); }
+  else if (s.endsWith('+')) { suffix = ', check'; s = s.slice(0, -1); }
+
+  if (s === 'O-O') return 'castles kingside' + suffix;
+  if (s === 'O-O-O') return 'castles queenside' + suffix;
+
+  // Piece letter (absent for pawns), optional disambiguation (file/rank,
+  // dropped -- not worth spelling out for a spoken call), optional capture,
+  // destination square, optional promotion. Backtracking resolves the
+  // disambiguation/destination split correctly since the pattern is
+  // anchored at both ends.
+  const m = s.match(/^([KQRBN])?[a-h]?[1-8]?(x)?([a-h][1-8])(?:=([QRBN]))?$/);
+  if (!m) return s + suffix; // unrecognized shape -- just read the SAN itself
+
+  const [, pieceLetter, capture, dest, promo] = m;
+  let phrase = (pieceLetter ? PIECE_NAMES[pieceLetter] : 'pawn') + (capture ? ' takes ' : ' to ') + dest;
+  if (promo) phrase += ', promotes to ' + PIECE_NAMES[promo];
+  return phrase + suffix;
+}
+
+function speakMove(san) {
+  if (!document.getElementById('voiceMoves').checked || !('speechSynthesis' in window)) return;
+  // speak() queues rather than interrupts, so the human's move and the
+  // bot's reply that follows it play back in order with no extra
+  // coordination needed.
+  window.speechSynthesis.speak(new SpeechSynthesisUtterance(sanToSpeech(san)));
+}
+
 // Buckets mirror the rough shape of lichess/chess.com's inaccuracy/mistake/
 // blunder tiers, but in raw centipawns rather than their win%-based curve --
 // simpler, and consistent with the cp figures already shown elsewhere here.
@@ -731,6 +775,7 @@ async function maybeBotMove() {
   board.position(game.fen());
   renderMoveList();
   awaitingBot = false;
+  speakMove(data.san);
 
   if (game.game_over()) {
     setStatus(describeGameOver());
@@ -824,6 +869,7 @@ async function afterMove() {
   board.position(game.fen());
   renderMoveList();
   setFeedback('');
+  speakMove(game.history()[viewPly - 1]);
 
   if (game.game_over()) {
     setStatus(describeGameOver());
@@ -893,6 +939,7 @@ function onSnapEnd() {
 }
 
 function startNewGame() {
+  if ('speechSynthesis' in window) window.speechSynthesis.cancel(); // drop any queued/playing announcements from the last game
   game.reset();
   viewPly = 0;
   gameEndedManually = null;
