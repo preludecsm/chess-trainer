@@ -253,6 +253,20 @@
 
   <div class="sidebar">
     <div class="panel">
+      <label>Stockfish eval (White's perspective)</label>
+      <div class="eval-label" id="evalLabel">--</div>
+      <div class="eval-bar-wrap"><div class="eval-bar-white" id="evalBar" style="width:50%;"></div></div>
+      <label style="margin-top:10px;">Top engine moves</label>
+      <div id="topMoves">
+        <div class="move-line"><span>--</span><span>--</span></div>
+        <div class="move-line"><span>--</span><span>--</span></div>
+      </div>
+      <label style="margin-top:10px; text-transform:none; letter-spacing:0; display:flex; align-items:center; gap:6px; cursor:pointer;">
+        <input type="checkbox" id="showHints"> Show hints before I move
+      </label>
+    </div>
+
+    <div class="panel">
       <label>Moves</label>
       <div class="row">
         <button id="navFirst" class="secondary" title="First move">⏮</button>
@@ -338,20 +352,6 @@
         the status line says so if it isn't. Good for trying a different
         response to the same early decision as many times as you want.</p>
       </div>
-    </div>
-
-    <div class="panel">
-      <label>Stockfish eval (White's perspective)</label>
-      <div class="eval-label" id="evalLabel">--</div>
-      <div class="eval-bar-wrap"><div class="eval-bar-white" id="evalBar" style="width:50%;"></div></div>
-      <label style="margin-top:10px;">Top engine moves</label>
-      <div id="topMoves">
-        <div class="move-line"><span>--</span><span>--</span></div>
-        <div class="move-line"><span>--</span><span>--</span></div>
-      </div>
-      <label style="margin-top:10px; text-transform:none; letter-spacing:0; display:flex; align-items:center; gap:6px; cursor:pointer;">
-        <input type="checkbox" id="showHints"> Show hints before I move
-      </label>
     </div>
 
     <div class="panel">
