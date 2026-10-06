@@ -222,6 +222,23 @@
     transform: translate(-50%, -50%);
     pointer-events: none;
   }
+  /* Portrait (phone held upright, or any narrow/tall browser window): stack
+     the panels below the board instead of beside it -- side-by-side doesn't
+     fit a phone's width. Landscape (tablet, desktop) keeps the default row
+     layout above untouched, sidebar to the right, regardless of device. */
+  @media (orientation: portrait) {
+    .layout {
+      flex-direction: column;
+      align-items: stretch;
+      max-width: 480px;
+    }
+    #board {
+      width: 100%;
+    }
+    .sidebar {
+      width: 100%;
+    }
+  }
 </style>
 </head>
 <body>
@@ -1053,6 +1070,12 @@ board = Chessboard('board', {
   onDrop: onDrop,
   onSnapEnd: onSnapEnd
 });
+
+// chessboard.js sizes itself from #board's rendered width once, at creation --
+// it doesn't track CSS changes on its own. The portrait/landscape media query
+// above changes that width on rotation, so the board needs an explicit nudge
+// to match (window "resize" fires on orientation change too, not just resize).
+window.addEventListener('resize', () => board.resize());
 
 // chessboard.js's own mousedown handling only engages (and thus only calls
 // onDrop) when the clicked square currently holds a piece the human is
