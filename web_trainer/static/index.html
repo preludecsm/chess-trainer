@@ -312,6 +312,7 @@
         <label style="text-transform:none; letter-spacing:0; display:flex; align-items:center; gap:6px; cursor:pointer; margin:0;">
           <input type="checkbox" id="voiceMoves"> Voice moves
         </label>
+        <select id="voiceSelect" style="flex:1; min-width:0;"></select>
       </div>
       <div class="row" style="margin-bottom:0;">
         <button id="copyPgn" class="secondary">Copy PGN</button>
@@ -697,10 +698,59 @@ function sanToSpeech(san) {
 
 function speakMove(san) {
   if (!document.getElementById('voiceMoves').checked || !('speechSynthesis' in window)) return;
+  const utterance = new SpeechSynthesisUtterance(sanToSpeech(san));
+  const voice = voices.find(v => v.name === selectedVoiceName);
+  if (voice) utterance.voice = voice;
   // speak() queues rather than interrupts, so the human's move and the
   // bot's reply that follows it play back in order with no extra
   // coordination needed.
-  window.speechSynthesis.speak(new SpeechSynthesisUtterance(sanToSpeech(san)));
+  window.speechSynthesis.speak(utterance);
+}
+
+// Voice picker: the default system voice tends to sound the most robotic --
+// most platforms also ship several higher-quality ones (macOS/iOS "Enhanced"
+// or "Premium" voices, say), so let the player switch. getVoices() is often
+// empty until the browser finishes loading its voice list asynchronously
+// (onvoiceschanged fires once it does -- immediately on some browsers, not
+// at all on others that already had the list ready), so both paths are
+// covered. The choice is remembered by name (not list position, which isn't
+// stable across reloads) via localStorage -- per-browser/device already,
+// same as the voice list itself.
+let voices = [];
+let selectedVoiceName = (() => {
+  try { return localStorage.getItem('voiceName'); } catch (e) { return null; }
+})();
+
+function populateVoiceList() {
+  voices = window.speechSynthesis.getVoices();
+  if (voices.length === 0) return;
+  if (!selectedVoiceName || !voices.some(v => v.name === selectedVoiceName)) {
+    // Prefer a higher-quality voice if one's been downloaded (macOS/iOS mark
+    // these "Enhanced"/"Premium" in the name); otherwise defer to whatever
+    // the browser itself calls default rather than guessing -- the plain
+    // voice list is mostly novelty voices (Albert, Zarvox, Bubbles...) and
+    // picking "alphabetically first" could land on one of those, which
+    // would be a worse default than what's already playing.
+    const enhanced = voices.find(v => /^en/i.test(v.lang) && /enhanced|premium/i.test(v.name));
+    const def = voices.find(v => v.default);
+    const english = voices.find(v => /^en/i.test(v.lang));
+    selectedVoiceName = (enhanced || def || english || voices[0]).name;
+  }
+  document.getElementById('voiceSelect').innerHTML = voices.map(v =>
+    '<option value="' + v.name.replace(/"/g, '&quot;') + '"' +
+    (v.name === selectedVoiceName ? ' selected' : '') + '>' +
+    v.name + ' (' + v.lang + ')</option>'
+  ).join('');
+}
+
+document.getElementById('voiceSelect').addEventListener('change', (e) => {
+  selectedVoiceName = e.target.value;
+  try { localStorage.setItem('voiceName', selectedVoiceName); } catch (e) {}
+});
+
+if ('speechSynthesis' in window) {
+  populateVoiceList();
+  window.speechSynthesis.onvoiceschanged = populateVoiceList;
 }
 
 // Buckets mirror the rough shape of lichess/chess.com's inaccuracy/mistake/
