@@ -16,17 +16,11 @@
       "Bash(aws iam list-*)",
       "Bash(aws iam get-*)",
       "Bash(aws sesv2 list-*)",
-      "Bash(aws ec2 authorize-security-group-ingress --group-id sg-080c28ba615f5e647 --protocol tcp --port 22 --cidr *)",
-      "Bash(aws ec2 revoke-security-group-ingress --group-id sg-080c28ba615f5e647 --protocol tcp --port 22 --cidr *)",
       "Bash(python3 -m json.tool*)",
       "Bash(chmod +x *)",
       "Bash(lsof -i :5001*)",
       "Bash(pkill -f \"server.py\"*)",
-      "Bash(venv-pypy/bin/python server.py*)",
-      "Bash(ssh -i ~/.ssh/chess-trainer-key.pem ec2-user@44.227.208.213 'cat /opt/chess-trainer/invites.json'*)",
-      "Bash(ssh -i ~/.ssh/chess-trainer-key.pem ec2-user@44.227.208.213 'docker logs trainer*)",
-      "Bash(ssh -i ~/.ssh/chess-trainer-key.pem ec2-user@44.227.208.213 'docker ps*)",
-      "Bash(ssh -i ~/.ssh/chess-trainer-key.pem ec2-user@44.227.208.213 'crontab -l*)"
+      "Bash(venv-pypy/bin/python server.py*)"
     ]
   }
 }
